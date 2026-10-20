@@ -4,6 +4,44 @@
 **Reviewed:** 2026-09-16 (via document-review workflow: coherence, feasibility, security-lens,
 scope-guardian, adversarial; findings folded in below)
 **Reviewed:** 2026-10-20 (four-lens review of the 2026-10-20 refresh: coherence, feasibility against the code, security, client fit)
+**Addendum:** 2026-10-20 (the operator answers all seven open questions; review resolution 61).
+Two answers are in the operator's own words. Question 2, the one-time bootstrap secret: "Approved,
+as long as its single-use". Question 3, the trusted-ref wording: "Approved". The other five reached
+this plan as the coordinator relayed them the same day:
+1. refresh tokens with rotation and revocation, agreed;
+4. rollback over MCP pulled into 2c, agreed;
+5. a ChatGPT client secret only if it is actually needed, so the public-client design stays;
+6. ChatGPT on iOS works, once a custom connector is set up on the web or in the desktop app;
+7. recovery-code sessions stay restricted to enrolling a passkey, agreed.
+
+The coordinator also accepted two sequencing recommendations: the `m2c` push fence, with a check
+that Railway deploys `main` only, and the disposable Railway environment for step 3's measurement.
+Each answer is now a settled decision (5 to 11, in "Decisions the operator settled"). No question
+is open. It changed:
+- **Refresh tokens and revocation** (settled decision 5, decision 26). They are opaque, stored
+  only as hashes and single-use with rotation, and a reused one revokes its whole family. Each is
+  bound to client, subject, scopes and resource, with a 14-day idle timeout and a 30-day family
+  lifetime, issued only to a client whose table entry allows it. `offline_access` is still neither
+  advertised nor needed. There is an RFC 7009 `/revoke`, an operator revoke on the approvals page,
+  and every event is journaled with no token value. Access tokens stay at 3600 s. This changes
+  trust boundary 1b, Out of scope, decisions 3, 12, 19 to 23, settled decisions 2 and 4, tests 20,
+  23 and 15, new tests 32 and 33, and new tasks 26 and 27.
+- **A one-time bootstrap secret** (settled decision 6, decision 27) replaces the enrollment CLI
+  and the host-side break-glass, on the deployment and locally. The account name is now the
+  subject, chosen by the operator, so the allowlists can be written before the first boot. Trust
+  boundary 5 gains one bounded carve-out. Go-live step 4, decision 24, test 25, new test 34 and
+  new task 28. Task 10 loses its CLI half.
+- **The trusted-ref wording is approved** (settled decision 7). Task 25 no longer waits on the
+  operator.
+- **Rollback over MCP** (settled decision 8, decision 28). Both `rollback_plan` and
+  `rollback_apply` land, because decision 3 already gave both a scope row, together with teardown
+  `run_status`. `rollback_apply` now returns at once rather than running inside the request. New
+  test 35 and new task 29, and test 7's exception goes.
+- **The confidential-client delta is a fallback, not a task** (settled decision 9). It is built
+  only if verify item 27 or 37 fails live.
+- **ChatGPT on iOS** (settled decision 10). The Goal stands as written. Step 10 sets the connector
+  up on the web or desktop and uses it from iOS.
+- **Recovery-code sessions stay restricted** (settled decision 11).
 **Addendum:** 2026-10-20 (the four-lens review, folded in; every disposition, and what was not
 applied as written, is review resolution 60). It changed:
 - **Go-live order.** The step-6 deploy now carries `WILLIKINS_PUBLIC_URL`, the four lifetimes
@@ -116,10 +154,10 @@ from the Claude or ChatGPT iOS apps, as a simple MCP". Both apps connect from th
 infrastructure. They call `/mcp`, both well-known documents and `/token` from there, open
 `/authorize` in the user's browser, and redirect to the vendor's own HTTPS callback. So the
 milestone is also not done until test 19 has connected each app on the web and used it from that
-app on iOS, against the public domain. Loopback redirects remain for local clients only. Whether
-a custom ChatGPT plugin is usable from the ChatGPT iOS app at all is unverified (verify item 27);
-what "done" means if it is not is the operator's call (open question 6), and this sentence is not
-relaxed until they make it.
+app on iOS, against the public domain. Loopback redirects remain for local clients only. For
+ChatGPT the operator settled how (settled decision 10): a custom connector may have to be set up
+on the web or in the desktop app, and is then usable from the iOS app. So test 19 sets it up there
+and uses it from iOS, and this sentence stands as written.
 
 ## Out of scope
 
@@ -251,16 +289,15 @@ no longer describe the system while still being cited as though they did.
 
 ## Decisions
 
-Twenty-five numbered decisions. Ten the milestone cannot start without, each with its reasoning and
-the acceptance test that pins it; then eight smaller ones the resource-server research left
+Twenty-eight numbered decisions. Ten the milestone cannot start without, each with its reasoning
+and the acceptance test that pins it; then eight smaller ones the resource-server research left
 unresolved and the plan may not leave silent; then six the authorization-server half adds; then
-one the 2026-10-20 addendum adds, on where the deployed server's documents come from. Four
-questions were the operator's, and the operator settled all four on 2026-09-16; they are in
-**Decisions the operator settled** near the end, each with the delta of the road not taken, and
-the text cites them as "settled decision N". The plan is written at those settings throughout,
-because a task table and a pin table cannot be conditional. What still needs the operator is in
-**Open questions, 2026-10-20** at the end, cited as "open question N"; none of those changes the
-task table.
+one the 2026-10-20 restatement adds, on where the deployed server's documents come from; then
+three the operator's 2026-10-20 answers add (refresh tokens, the bootstrap secret, rollback over
+MCP). Eleven questions were the operator's: four settled on 2026-09-16 and seven on 2026-10-20.
+They are in **Decisions the operator settled** near the end, each with the delta of the road not
+taken, and the text cites them as "settled decision N". The plan is written at those settings
+throughout, because a task table and a pin table cannot be conditional. No question is open.
 
 ### 1. The resource-server half at `/mcp`
 
@@ -1391,7 +1428,8 @@ are inserted after them.)
       `registration_endpoint`. Anthropic says "You can't change authentication settings after you
       add a connector", so a wrong pick means deleting the connector and adding it again. Then use
       it from the Claude iOS app.
-    - **ChatGPT.** OpenAI: "**Access:** Use ChatGPT on the web". Go to ChatGPT Plugins, select
+    - **ChatGPT.** OpenAI: "**Access:** Use ChatGPT on the web". Set the connector up **on the
+      web or in the desktop app**, never from iOS (settled decision 10). Go to ChatGPT Plugins, select
       the plus button, then **Add custom MCP server**. Configure OAuth with the ChatGPT entry's
       client id as a static credential and a blank secret (whether the form accepts a blank
       secret is verify item 27). **Before connecting, read the redirect URI the form shows.** If
@@ -1399,7 +1437,7 @@ are inserted after them.)
       `railway restart`, because the table is read only at startup (decision 23). Then select
       **Create as a plugin**, install it ("Install it before using it in a conversation"), and
       invoke it in a conversation by typing `@` and selecting it. Then use it from the ChatGPT iOS
-      app, if a custom plugin is usable there at all (verify item 27; open question 6).
+      app, which the operator reports works once the connector exists (settled decision 10).
 
     Each connection is one passkey consent at `/authorize`.
 11. **Record the tenancy.** The live service serves **one organization or workplace per provider
@@ -1849,7 +1887,8 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   depends on whether the vendor binds `state` to the browser session that started the flow
   (RFC 6749 §10.12: "The client MUST implement CSRF protection for its redirection URI"), which
   is verify item 37. The subject allowlist does not help, because the token's `sub` is the
-  operator's. Risks records the threat, and open question 5 records the stronger delta.
+  operator's. Risks records the threat. The stronger delta, a per-deployment client secret, is
+  settled decision 9's fallback: it is built only if verify item 37 or 27 fails live.
 - **An `/authorize` with no session parks the request, logs in, and resumes** (2026-10-20; the
   earlier text did not say how). On a phone, the first `/authorize` comes from the Claude or
   ChatGPT app in a fresh browser context with no willikins session. In order:
@@ -2224,8 +2263,8 @@ the real cost of the milestone is.
   break-glass. **What it no longer mitigates** (2026-10-20 review): because a recovery session can
   only enrol a passkey, a browser context that refuses `navigator.credentials` on the deployment's
   domain (verify item 13) cannot be rescued by a recovery code. If test 19 finds an app's
-  `/authorize` context refuses passkeys, that app cannot connect until the operator chooses
-  otherwise (open question 7).
+  `/authorize` context refuses passkeys, that app cannot connect. The operator kept the
+  restriction at that price (settled decision 11).
 
 *Settled by the operator (settled decision 1, passkeys), and pinned by tests 10, 24, 25.*
 
@@ -2471,8 +2510,8 @@ trusted ref"). The proposed text: "Workflow documents and templates are privileg
 only from a source the deployment's operator controls — a checkout of a trusted ref locally, or on a
 deployment the mounted directory the operator populates from one — and every plan pins their
 sha256." `todos/2026-09-20-agent-authored-workflows.md` already records the operator's view that
-"What counts as the trusted ref is a property of a deployment". The wording is still the operator's
-to accept (open question 3).
+"What counts as the trusted ref is a property of a deployment". The operator approved the wording
+on 2026-10-20: "Approved" (settled decision 7). Task 25 lands it byte-identical in both files.
 
 *Pinned by tests 27, 28, 29 and 30, and by test 19's volume checks.*
 
@@ -3324,7 +3363,8 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       - ChatGPT connected on the web with its static client id, recording whether a blank secret is
         accepted (verify item 27) and the redirect URI the form shows, compared with the client
         table's entry before connecting; then installed as a plugin, invoked with `@`, and used
-        from the ChatGPT iOS app if that app can use a custom plugin (open question 6).
+        from the ChatGPT iOS app (settled decision 10: set up on the web or desktop, used from
+        iOS).
       - For each, recorded rather than assumed:
         - the `Origin` header its backend sends on `initialize`, if any, set into
           `WILLIKINS_EXTRA_ALLOWED_ORIGINS` and restarted if so (verify item 26);
@@ -3624,7 +3664,7 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 16 | **Adversarial pass 3**, against the foreign-issuer fixture and against willikins' own endpoints: decision 7's whole table, recorded under `docs/research/`, plus the 2026-10-20 surfaces. Those are `state` tampering and omission; a parked request resumed from another browser; the consent CSP widened beyond the one origin; a forward-plan nonce against a teardown and the reverse; a symlinked or swapped workflows directory; a document changed between plan and approval; and the synthetic listed-origin row of `WILLIKINS_EXTRA_ALLOWED_ORIGINS`. The 2026-10-20 review's rows join them: the consent POST forgeries, the restricted recovery session, the enrollment token, the username and `/token` floods, and the scope-widening redemption. Freeze `post-2c-new-shapes.jsonl`. Test 17 | 12, 13, 14, 15, 21, 22, 23, 24 | **opus** |
 | 17 | Bound the header read: replace `axum::serve` with a `hyper::server::conn::http1` accept loop (timer first, decision 8) carrying graceful shutdown and connection accounting; flip the pass-2 slowloris test. Runs **after** pass 3, with a short pass-3 addendum recording that the transport changed under it. Pinned by: test 13, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: http_server:: http_smoke::` | 16 | sonnet, verified by opus |
 | 18 | **The conformance run.** The `live-tests` feature and its own `[[test]]` target (outside `tests/it/`, as 3k allows), and the harness that drives a stock local MCP client through discovery, `/authorize`, `/token` and `list_tools` against a locally bound server, unregistered and registered. Test 18 | 17 | sonnet writes the harness, run with the operator |
-| 25 | **The invariant's wording** (decision 25): the "trusted ref" invariant re-founded, edited together in `CLAUDE.md` and `AGENTS.md`; a design-doc addendum beside `docs/plans/2026-09-11-willikins-design.md`'s "a checkout of a trusted ref"; and the written rule that only the operator writes the volume, in both files and in memory. **The operator approves the wording first** (open question 3). No code | 20, operator | coordinator with the operator |
+| 25 | **The invariant's wording** (decision 25): the "trusted ref" invariant re-founded, edited together in `CLAUDE.md` and `AGENTS.md`; a design-doc addendum beside `docs/plans/2026-09-11-willikins-design.md`'s "a checkout of a trusted ref"; and the written rule that only the operator writes the volume, in both files and in memory. The wording is the one decision 25 proposes, **approved by the operator on 2026-10-20** (settled decision 7), and it lands byte-identical in both files. No code | 20 | coordinator |
 | 19 | Go-live (decision 9): the echo measurement on a disposable environment, never the live service; allowed hosts; step 4a's accounts and both allowlists; the private documents and the client table on the volume; the signing key generated and injected through Doppler, then the `m2c` merge and push (the push fence), with `.railway/railway.ts` and `railway config plan` and the retired variables removed in the same change; the domain attached once that deploy is healthy; step 4b's enrollments; Doppler's other secrets; the backups; `WILLIKINS_FAKE_CATALOG` removed with its `preserve()` row; both apps connected and used from iOS; the stock-client run against the public domain; one real cycle. Mark this plan **Completed**. Test 19 | 18, 25, operator | coordinator with the operator |
 
 **Why task 1 moved to the front.** In the delegating draft the Dockerfile question was a dependency
@@ -3885,9 +3925,11 @@ settled by test 19 with the operator.
 27. **Task 19: whether ChatGPT's static-credential form accepts a client id with a blank secret.**
     OpenAI's auth guide implies that method `none` works for predefined clients ("This applies to
     CIMD, DCR, and predefined OAuth clients"), but the form itself was not observed. If it does
-    not, the delta is a confidential client and `client_secret_post`, which reopens trust boundary 5
-    (open question 5). Related, also unfetched (the help-centre page answered 403): which ChatGPT
-    plan tiers allow a custom connector, and whether such a connector is usable from the iOS app.
+    not, the delta is a confidential client and `client_secret_post`, which reopens trust boundary 5.
+    That delta is settled decision 9's fallback, built only if this item fails. Related, also
+    unfetched (the help-centre page answered 403): which ChatGPT plan tiers allow a custom
+    connector. Whether such a connector is usable from the iOS app is settled by the operator: it
+    is, once set up on the web or desktop (settled decision 10).
 28. **Task 19: whether ChatGPT steps up on willikins' transport-level 403 `insufficient_scope`.**
     OpenAI documents re-linking only through per-tool `securitySchemes` plus a tool result carrying
     `_meta["mcp/www_authenticate"]`. The 401 naming the three MCP scopes (decision 1) should make a
@@ -3928,8 +3970,8 @@ settled by test 19 with the operator.
     obligation ("The client MUST implement CSRF protection for its redirection URI"), and nothing
     fetched says whether Claude or ChatGPT meets it. Attempt it with the operator from a second
     vendor account: start a connection there, complete the consent as the operator in another
-    browser, and record where the code lands. It decides how much of the consent-phishing risk
-    open question 5's per-deployment secret would close.
+    browser, and record where the code lands. If the code lands in the second account's connector,
+    settled decision 9's fallback, the per-deployment secret, is triggered.
 
 ## Risks
 
@@ -4038,7 +4080,8 @@ Then, in descending order of how likely each is to surprise someone:
   Since the 2026-10-20 review a recovery code no longer covers that case, because a recovery
   session may only enrol a passkey (decision 24); it still covers a lost device, which is why
   decision 24 refuses to defer it. If an iOS app's `/authorize` context is the browser that
-  refuses, that app cannot connect (verify item 13, open question 7).
+  refuses, that app cannot connect (verify item 13); the operator accepted that price (settled
+  decision 11).
 - **Consent phishing through a shared public client id** (2026-10-20 review). A hosted app's
   `client_id` is public and the same for every account on that vendor, so anyone with their own
   Claude or ChatGPT account can start a flow against this server and send the operator the
@@ -4048,7 +4091,8 @@ Then, in descending order of how likely each is to surprise someone:
   started the flow (verify item 37); the subject allowlist does not help, because the `sub` is the
   operator's. Mitigated in 2c only by the consent screen's request age and warning (decision 20).
   The stronger answer is a per-deployment client secret entered only in the operator's own
-  connector, which touches trust boundary 5 and is open question 5.
+  connector. It touches trust boundary 5, and settled decision 9 makes it a fallback that is built
+  only if verify item 37 shows a vendor does not bind `state`.
 - **A stolen session cookie is valid until its TTL expires, the idle timer fires, the browser logs
   out, or the credential changes.** The last of those is new and is the real revocation: a
   credential change flushes every live session for that account (decision 4). Beyond it there is
@@ -4179,9 +4223,11 @@ Then, in descending order of how likely each is to surprise someone:
 ## Decisions the operator settled, and what each delta would have been
 
 Four questions stood open when this plan was rewritten. The operator settled all four on
-2026-09-16, and the plan is written at those settings throughout — the task table, the pin table
-and the variable table are not conditional. This section keeps the reasoning and the delta of the
-road not taken, because a decision whose alternative is forgotten cannot be revisited honestly.
+2026-09-16. Seven more, the open questions of the 2026-10-20 restatement, were answered on
+2026-10-20 and are settled decisions 5 to 11 below. The plan is written at those settings
+throughout — the task table, the pin table and the variable table are not conditional. This
+section keeps the reasoning and the delta of the road not taken, because a decision whose
+alternative is forgotten cannot be revisited honestly.
 
 1. **The human login method: passkeys, through `webauthn-rs` 0.5.5.** Operator: "Passkeys are good
    enough." *The reason:* this deployment has no email and no SMS, so a password path has **no
@@ -4227,7 +4273,50 @@ road not taken, because a decision whose alternative is forgotten cannot be revi
    so the two numbers are one decision and move together. *2026-10-20:* this stands. What it costs
    on the phone use case is recorded as open question 1, not changed.
 
-**Not operator decisions, recorded here so they do not become a fifth.** `SameSite=Strict` versus
+**Settled 2026-10-20.** Answers 6 and 7 below are in the operator's own words; the other five are
+as the coordinator relayed them (the 2026-10-20 addendum at the top says which is which).
+
+5. **Hourly re-consent: refresh tokens, with rotation and revocation** (was open question 1).
+   *The reason:* the phone use case that put 2c on the critical path would otherwise cost a
+   passkey round trip every hour in each app. *What it carries:* decision 26 in full, the first
+   durable authorization-server state, and the access-token lifetime stays at 3600 s (settled
+   decision 4). *The road not taken:* a longer per-client access-token lifetime, the cheaper way
+   out of the longevity todo. It needs no store, but it widens the leak window of every token in
+   proportion and cannot be revoked at all.
+6. **First enrolment and break-glass: a one-time bootstrap secret** (was open question 2).
+   Operator: "Approved, as long as its single-use". *The reason:* the image is distroless and the
+   credential store is on the volume, so a host-side CLI had no host. *What it carries:* decision
+   27, an operator-chosen account name as the subject, and one bounded carve-out in trust boundary
+   5. *The roads not taken:* a one-off Railway command running the same image, an operator-only
+   image variant, or running the CLI against a downloaded store and publishing it back. The first
+   two depend on verify item 29, and the third moves identity state by hand.
+7. **The trusted-ref invariant's wording** (was open question 3). Operator: "Approved". Decision
+   25's text lands in `CLAUDE.md` and `AGENTS.md`, byte-identical, plus the design-doc addendum
+   (task 25).
+8. **Rollback over MCP is pulled into 2c** (was open question 4). *The reason:* without it, the
+   approvals page's teardown section has no production producer, because the CLI is the only
+   other caller of `Butler::plan_rollback` and it cannot reach the deployment's journal. *What it
+   carries:* decision 28, with **both** tools, because decision 3 already fixed a scope row for
+   each.
+9. **A ChatGPT client secret only if it is actually needed** (was open question 5). The
+   public-client design stands. *The conditional fallback, not built unless triggered:* if verify
+   item 27 finds ChatGPT's static-credential form refuses a blank secret, or verify item 37 finds a
+   vendor does not bind `state` to the browser that started the flow, the hosted entries become
+   confidential clients. That means `client_secret_post` or `client_secret_basic`, with a
+   per-deployment secret entered only in the operator's own connector, so that a code redeems only
+   there. That brings back a static shared secret, which trust boundary 5 would then name as its
+   second carve-out. It touches decision 21's empty-secret rule, decision 23's schema (a hashed
+   secret per entry), test 23 and the go-live step 10 forms. Until a trigger fires, none of that is
+   built.
+10. **ChatGPT on iOS works** (was open question 6). A custom connector may have to be set up on the
+    web or in the desktop app, and is then usable from the iOS app. The Goal stands. Go-live step
+    10 says to set it up on the web or desktop and then use it from iOS.
+11. **Recovery-code sessions stay restricted to enrolling a passkey** (was open question 7). *The
+    cost, accepted:* if an app's `/authorize` browser context refuses `navigator.credentials`
+    (verify item 13), that app cannot connect, and a recovery code does not rescue it. *The road not
+    taken:* letting a recovery session consent, and possibly approve, on a single-factor secret.
+
+**Not operator decisions, recorded here so they do not become a twelfth.** `SameSite=Strict` versus
 `Lax` is a **browser measurement** (verify item 7), not a preference: measure whether `Strict`
 withholds the session cookie on an externally-initiated top-level navigation to `/authorize` before
 flipping anything, and default to `Lax` until it is measured. Whether `localhost` joins `127.0.0.1`
@@ -4773,57 +4862,19 @@ question this plan no longer asks.
     - **Recovery sessions** are restricted as security asked. The cost to decision 24's
       browser-refusal mitigation is open question 7, not a silent loss.
 
-## Open questions, 2026-10-20
+## Open questions, 2026-10-20: all answered
 
-These are the operator's. Each one either touches a decision the operator settled or has no answer
-the code can supply. The plan is written so that **none of them blocks tasks 1 to 18 or 20 to 24**.
-Each names what it blocks.
+The restatement left seven questions for the operator, and the operator answered all seven on
+2026-10-20. Each is now a settled decision, and the text cites it as one. This section is kept
+only as a map, so that a resolution or a commit message citing "open question N" still finds
+what happened to it.
 
-1. **Hourly passkey re-consent from the phone.** Out of scope: refresh tokens. Settled decision 4:
-   a 3600-second token. Together they mean the phone use case that put 2c on the critical path
-   (`todos/2026-09-20-remote-mcp-from-a-phone.md`) costs a browser round trip and a passkey every
-   hour, in each app, and possibly a trip to settings if the app flips to "Reconnect" (verify item
-   32). The plan does not change either decision. The cheapest way out is a longer per-client
-   lifetime, and the client table already has room for the column
-   (`todos/2026-09-16-unattended-agents-token-longevity.md`). Refresh plus revocation is the other.
-   *Blocks:* nothing in the code; the answer may change test 19's expectations.
-2. **Where decision 24's host-side enrollment CLI and break-glass run on this deployment.** Both
-   assume a host with a shell, holding the credential store and the journal. On Railway the image
-   is distroless and both files are on the volume (decision 25). Whether `railway ssh` reaches a
-   shell-less container is verify item 29. Some shapes, none of them chosen:
-   - a one-off Railway command running the same image;
-   - a separate operator-only image variant;
-   - running the CLI on the operator's machine against a downloaded copy, then publishing the
-     credential store back by the volume procedure, which moves identity state by hand.
-
-   *Blocks:* go-live step 4, and with it task 19.
-3. **The trusted-ref invariant's wording.** Decision 25 proposes new text for `CLAUDE.md` and
-   `AGENTS.md`, plus a design-doc addendum (task 25). This revision edited only this plan, so
-   neither file has changed. *Blocks:* task 25, and through it task 19.
-4. **Pull `rollback_plan` over MCP into 2c?** Decision 4 makes teardowns approvable on the rebuilt
-   page. But on the deployment, only `Butler::plan_rollback` can create a teardown, and its one
-   caller is the host CLI, which has the same reachability problem as question 2. So until
-   `todos/2026-10-16-rollback-over-mcp.md` lands, the view is exercised by tests and has no
-   production producer. Pulling the tool in is one more `#[tool]`, whose scope row is already
-   fixed, plus its snapshot. *Blocks:* nothing in 2c as written.
-5. **If ChatGPT's static-credential form refuses a blank secret** (verify item 27), **or if a
-   vendor does not bind `state` to the browser that started a flow** (verify item 37, added by
-   the 2026-10-20 review): the delta is a confidential client with `client_secret_post` or
-   `client_secret_basic` for the hosted entries, a per-deployment secret entered only in the
-   operator's own connector, so that a code redeems only there. It brings back a static shared
-   secret that trust boundary 5 removed. That is the operator's call, not the plan's. *Blocks:* the ChatGPT
-   half of go-live step 10 only.
-6. **What "done" means if ChatGPT's iOS app cannot use a custom plugin** (added by the 2026-10-20
-   review). OpenAI's page says "**Access:** Use ChatGPT on the web" for adding one, and says
-   nothing about iOS. The Goal requires each app to be used from iOS. One answer is to record a
-   vendor limit and mark the milestone Completed without that half. The other is to hold the
-   milestone open until the vendor supports it. The plan does not choose. *Blocks:* marking this
-   plan Completed, and only if test 19 finds the limit.
-7. **Recovery-code sessions may only enrol a passkey** (added by the 2026-10-20 review, applied
-   at that setting). The review's case: a recovery code is single-factor, so letting it approve a
-   plan or consent to a `willikins:apply` token makes a stolen code worth as much as an
-   authenticator. The cost: decision 24 used to name recovery codes as the mitigation for a
-   browser that refuses `navigator.credentials`, and they no longer are. If test 19 finds that an
-   app's `/authorize` context refuses passkeys (verify item 13), that app cannot connect. The
-   alternative is to let a recovery session consent, and possibly approve, and accept the weaker
-   factor. *Blocks:* nothing in 2c as written; the answer may change test 25 and go-live step 10.
+| Open question | Settled decision | Where it landed |
+| --- | --- | --- |
+| 1. Hourly passkey re-consent from the phone | 5 | Decision 26; tasks 26 and 27; tests 32 and 33 |
+| 2. Where the enrollment CLI and break-glass run | 6 | Decision 27; task 28; test 34; go-live step 4 |
+| 3. The trusted-ref invariant's wording | 7 | Decision 25; task 25 |
+| 4. Rollback over MCP | 8 | Decision 28; task 29; test 35 |
+| 5. A confidential client for the hosted apps | 9 | A conditional fallback on verify items 27 and 37, not built |
+| 6. ChatGPT on iOS | 10 | The Goal and go-live step 10 |
+| 7. Recovery-code sessions | 11 | Decision 24, unchanged |
