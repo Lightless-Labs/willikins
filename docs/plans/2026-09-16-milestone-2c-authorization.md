@@ -2825,7 +2825,8 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     a tampered signature, and the same token against a server started with a **different
     `WILLIKINS_PUBLIC_URL`**, which is how the audience is varied now that it is derived. The run
     is recorded, and repeated against the public domain as a step of test 19.
-19. **Go-live checks**, run by hand with the operator, in decision 9's order.
+19. **Go-live checks**, run by hand with the operator. They are grouped by theme below, and each
+    is run at the decision 9 step it belongs to.
     - **Measured:** the `Host` and `X-Forwarded-Host` the service receives; what the edge does to a
       trickled header stream.
     - **Over the public domain, with no credential:** both metadata documents and the JWKS, and a
