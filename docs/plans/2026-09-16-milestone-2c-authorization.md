@@ -2577,32 +2577,43 @@ the code that reads each one.
 
 ## Acceptance tests
 
-Twenty-six. The milestone cannot ship without every one of them, and each names the exact status or
-error kind it expects. Tests 1 to 19 keep the numbers the 2026-09-16 review left them with, even
-where their content changed, so that every cross-reference in the resolutions below still points at
-the test it was written about; the authorization-server half is tests 20 to 26.
+Thirty-one. The milestone cannot ship without every one of them, and each names the exact status
+or error kind it expects. Tests 1 to 19 keep the numbers the 2026-09-16 review left them with, even
+where their content changed, so that every cross-reference in the resolutions below still points
+at the test it was written about. The authorization-server half is tests 20 to 26, and the
+2026-10-20 addendum's are tests 27 to 31.
+
+**Where they live, after 3k.** Each crate's default-built integration tests compile as one binary,
+`tests/it/main.rs`, with one module per file. So every new acceptance-test file gets a
+`mod <stem>;` line in its crate's `tests/it/main.rs`, or it is silently never compiled.
+`crates/willikins-core/tests/it/test_layout_guard.rs` catches a missing line. Test 18's
+`required-features = ["live-tests"]` target stays its own top-level binary, which 3k allows.
 
 1. **The protected-resource-metadata document.** `GET /.well-known/oauth-protected-resource/mcp`
    with no credential answers **200** and `content-type: application/json`; `resource` is
    byte-identical to the derived audience `<WILLIKINS_PUBLIC_URL>/mcp` — which holds by
    construction now that the audience is not separately configurable (decision 12);
    `authorization_servers` has exactly one entry and it is willikins' own issuer identifier,
-   byte-identical to `WILLIKINS_PUBLIC_URL`; `scopes_supported` is exactly the four of decision 3
-   and never contains `offline_access`; `bearer_methods_supported` is `["header"]`; no parameter
+   byte-identical to `WILLIKINS_PUBLIC_URL`; `scopes_supported` is exactly the three MCP scopes of
+   decision 3 and never contains `offline_access` or `willikins:approve`; `bearer_methods_supported` is `["header"]`; no parameter
    with zero values is present. The route answers with an unknown `Host` (it is outside rmcp's host
    check) and a bearer token is not required and not read. A companion test asserts the URL is
    built by insertion: a public URL of `https://h` publishes at
    `/.well-known/oauth-protected-resource/mcp`, and `GET /mcp/.well-known/oauth-protected-resource`
    answers **401**. Not 404 and never 200: that path sits *inside* the `/mcp` nest, so it meets the
    bearer middleware first, and the assertion is that it is refused as an unauthenticated MCP
-   request rather than serving the document at the wrong URL.
+   request rather than serving the document at the wrong URL. A second companion asserts the root
+   `/.well-known/oauth-protected-resource` serves **no** document, which is decision 1's deliberate
+   non-route.
 2. **The 401 challenge.** No `Authorization` header → **401**, `WWW-Authenticate` containing
    `Bearer`, `resource_metadata="<the exact URL from test 1>"` and the fixed
-   `scope="willikins:read"` — fixed because the token is validated before the body is read at all
-   (decision 3), so an unauthenticated challenge cannot know what the call would have needed —
+   `scope="willikins:read willikins:plan willikins:apply"`. It is fixed because the token is
+   validated before the body is read at all (decision 3), so an unauthenticated challenge cannot
+   know what the call would have needed, and it names the three MCP scopes for decision 1's reason.
+   The request is
    journaled `AuthFailedReason::MissingCredential`. A header that is not a `Bearer` credential
    (`Basic …`, say) → **401** `MissingCredential`, which is what ships today and what
-   `crates/willikins-server/tests/adversarial_10b.rs` pins; whether RFC 6750 §3.1 calls that
+   `crates/willikins-server/tests/it/adversarial_10b.rs` pins; whether RFC 6750 §3.1 calls that
    malformed, and therefore **400**, is verify item 22, and the task that ever flips it names
    every pinned test it flips. A well-formed but rejected token → **401** with the same header
    plus `error="invalid_token"`. `?access_token=` in the query string with no header → **401**
@@ -2651,13 +2662,16 @@ the test it was written about; the authorization-server half is tests 20 to 26.
    "test-only tool" would have to be compiled into the shipped binary or hidden behind a feature
    that nothing else needs. A tool call that makes a provider request against the mock HTTP server
    asserts the outgoing `Authorization` equals the operator credential and contains no substring of
-   the inbound token. The `expose_secret` guard
-   (`crates/willikins-core/tests/expose_secret_guard.rs`) and the `SinkToken::new` guard are
-   extended to cover the new modules — **including the issuing half, whose signing key is the one
-   new secret in the process** — and a sweep over the journal, every log line and every error body
-   produced during a full plan-approve-apply cycle asserts that neither the token's bytes nor any
-   byte of the private key appears anywhere. The guards gain **no new allowed `expose_secret`
-   site**: `Credential::authorize_basic` does not exist.
+   the inbound token. Three guards are extended to cover the new modules, **including the issuing
+   half, whose signing key is the one new secret in the process**: the `expose_secret` guard
+   (`crates/willikins-core/tests/it/expose_secret_guard.rs`), the `SinkToken::new` guard
+   (`sink_token_guard.rs`) and 3m's `TeardownToken::new` guard (`teardown_token_guard.rs`). A sweep
+   over the journal, every log line and every error body produced during a full
+   plan-approve-apply cycle asserts that neither the token's bytes nor any byte of the private key
+   appears anywhere. The guards gain **exactly one new allowed `expose_secret` site**: the signing
+   key's own `reveal_for_signing`, called only from `issuer::mint`. That is the sixth token-less
+   exception, beside the five `clippy.toml` already names (trust boundary 2). A second call site
+   anywhere fails the guard. `Credential::authorize_basic` does not exist.
 7. **Subjects, scopes and the 403.** A valid token whose `sub` is **not in
    `WILLIKINS_AGENT_SUBJECTS`** → **403** `AuthFailedReason::UnlistedSubject` on every tool
    including the read ones, with the journal carrying no `ToolCalled` for it — the allowlist is
@@ -2669,16 +2683,25 @@ the test it was written about; the authorization-server half is tests 20 to 26.
    `willikins:approve` alone → **403** on every MCP tool. A `tools/call` with no `name`, and one
    naming a tool that does not exist → **403**. An `initialize`, a `tools/list`, a `ping` and a
    notification from a listed subject → forwarded, no scope required. The consent screen of
-   decision 20 offers exactly the same four scopes, read from the same table, so the two cannot
-   drift apart.
+   decision 20 offers exactly the same three MCP scopes, read from the same table, so the two
+   cannot drift apart, and an `/authorize` asking for `willikins:approve` is granted only the MCP
+   scopes it asked for. **The table is tied to the tool list:** every tool in
+   `tests/it/snapshots/it__mcp_server__the_tool_list_and_every_schema_is_snapshotted.snap` has
+   exactly one row in `oauth::scope`'s table, the table names no tool beyond the list and the
+   pre-assigned rollback rows (`rollback_plan` → `willikins:plan`, the teardown apply →
+   `willikins:apply`), and a fixture tool list carrying an unknown tool fails the assertion.
 8. **Principal and journal.** The same `(iss, sub)` always derives the same
    `oauth-<12 hex>` principal and two different subjects never collide; the principal parses
    under `PrincipalId`'s grammar for a `sub` containing `|`, `:` and non-ASCII characters, and for
    the in-house UUID subject, which would have fitted the grammar directly and is derived anyway.
    Every event carrying a principal also carries `subject`, `issuer` and `client_id` when present,
    each bounded and escaped; a token with no `client_id` claim journals without it and does not
-   fail. `pre-2c-every-event.jsonl` and both pass-2 fixtures replay through `Journal` and through
-   `replay` unchanged.
+   fail. `TeardownPlanned` and `TeardownStarted` carry the claim fields like every other
+   principal-carrying event. `pre-2c-every-event.jsonl` holds every `Event` variant, the four
+   teardown variants included, and it and both pass-2 fixtures replay through `Journal` and through
+   `replay` unchanged. The `WrongRole` page and the enrollment CLI print `sub` whole, because
+   `OAuthSubject` is not an identifier type, while every plan or teardown rendering on the page is
+   still `mask_json`-masked.
 9. **Transport separation, asserted as identity of response.** `GET /approvals` with a valid
     access token in `Authorization` produces a response **byte-identical** to the same request with
     no header at all: **302** to `/approvals/login`, no session created, no `WWW-Authenticate`. The
@@ -2726,7 +2749,12 @@ the test it was written about; the authorization-server half is tests 20 to 26.
     `WILLIKINS_SESSION_TTL_SECONDS` larger than the approval window →
     `HttpConfigError::SessionOutlivesApprovalWindow`; `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS`
     larger than it → the same refusal. `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` above 600 →
-    refused. A `WILLIKINS_PUBLIC_URL` carrying a path, a query or a fragment → refused. A
+    refused. A `WILLIKINS_PUBLIC_URL` carrying a path, a query or a fragment →
+    `HttpConfigError::NonCanonicalUrl`, and so is one with an uppercase scheme or host
+    (`HTTPS://h`, `https://H`), an explicit default port (`https://h:443`), or a trailing `/`
+    (`https://h/`). A canonical value derives an issuer, an audience and a PRM `resource` that are
+    byte-identical to what Claude sends as `resource`. An unset `WILLIKINS_WORKFLOWS_DIR` →
+    `ConfigError::Missing`, with no fallback directory (decision 25). A
     `WILLIKINS_PUBLIC_URL` that is `http://` on a **non-loopback** host →
     `HttpConfigError::InsecureUrl`; the same URL on `127.0.0.1`, `[::1]` or `localhost` →
     **starts**, with a startup warning naming it (decision 7, both readings). An **unset**
@@ -2743,9 +2771,11 @@ the test it was written about; the authorization-server half is tests 20 to 26.
     other connections, and graceful shutdown still drains an in-flight run.
 14. **IPv6-aware origin check.** An `Origin` of `https://[::1]:8080` against an allowed host of
     `[::1]:8080` is accepted; `https://[::2]` is **403** `AuthFailedReason::ForeignOrigin`; a
-    bracketed literal never parses as a hostname containing a colon. The trailing-`/` rule of
-    decision 4 is asserted in the same test: `https://willikins.example.com.attacker.com` is
-    **403**, and a request carrying neither `Origin` nor `Referer` on a non-safe method is blocked.
+    bracketed literal with no port (`https://[::1]`) is matched as `[::1]` and never cut to `[:`
+    by `rsplit_once(':')` (`approvals.rs:276-284`). Two **pinning** cases for behaviour that already
+    ships (decision 4): `https://willikins.example.com.attacker.com` is **403**, because the match
+    is exact, and a request carrying neither `Origin` nor `Referer` on a non-safe method is
+    **403**.
 15. **Log level and the rmcp sweep.** With `WILLIKINS_LOG` raised to DEBUG and to TRACE, a full
     cycle (enrollment, login, `/authorize`, `/token`, plan, approve, apply, a provider error, an
     auth failure) emits no secret byte, no document text, no header value and no JSON-RPC request
@@ -2768,7 +2798,11 @@ the test it was written about; the authorization-server half is tests 20 to 26.
     `willikins-server` has **no `[features]` table today**, so task 18 adds one — `live-tests = []`
     — plus the `[[test]]` entry with `required-features = ["live-tests"]` that keeps the harness
     out of `--all-targets`. There is no external provider token to obtain, so what this test does
-    is drive a **stock MCP client** by hand against a locally bound `serve --http`: discovery of
+    is drive a **stock local MCP client** by hand against a locally bound `serve --http`, through
+    its loopback redirect. Neither target app can reach a local server: Anthropic says "Claude
+    reaches your server from Anthropic's infrastructure, so a server running on your machine needs
+    a public URL", and both are hosted clients with HTTPS redirects. So this test covers the local
+    half, and test 19 covers the hosted half against the public domain. The local run covers discovery of
     both metadata documents, then `/authorize` with PKCE, `/token`, and `list_tools` with the token
     that comes back. Two halves are asserted rather than observed. An **unregistered** client
     reaches `/authorize` and is refused by name — discovery works for a stranger, registration does
@@ -2777,22 +2811,55 @@ the test it was written about; the authorization-server half is tests 20 to 26.
     a tampered signature, and the same token against a server started with a **different
     `WILLIKINS_PUBLIC_URL`**, which is how the audience is varied now that it is derived. The run
     is recorded, and repeated against the public domain as a step of test 19.
-19. **Go-live checks**, run by hand with the operator, in decision 9's order: the measured `Host`
-    and `X-Forwarded-Host`; what the edge does to a trickled header stream; both metadata documents
-    and the JWKS fetched over the public domain by a client with no credential; a 401 whose
-    `resource_metadata` URL resolves; `railway config plan` showing no variable delete; whether a
-    push-triggered deploy picks up staged variable edits, and if it does not, that the previous
-    deployment stays healthy behind the healthcheck; the old variables gone before the deploy;
-    `WILLIKINS_FAKE_CATALOG` gone after it; the credential store and the signing key backed up and
-    a restore rehearsed; the stock-client run of test 18 repeated against the public domain; and
-    one real plan-approve-apply cycle.
+19. **Go-live checks**, run by hand with the operator, in decision 9's order.
+    - **Measured:** the `Host` and `X-Forwarded-Host` the service receives; what the edge does to a
+      trickled header stream.
+    - **Over the public domain, with no credential:** both metadata documents and the JWKS, and a
+      401 whose `resource_metadata` URL resolves. The domain resolves to a globally routable IPv4
+      address, and the registered URL answers without a 3xx: Anthropic says "Claude drops the
+      `Authorization` header on the redirect".
+    - **The variable cutover:** `railway config plan` showing no variable delete; whether a
+      push-triggered deploy picks up staged variable edits; for a volume-backed service, how much
+      downtime a redeploy costs and whether a failed deploy hands the volume back (verify item 30);
+      the old variables gone before the deploy, and `WILLIKINS_FAKE_CATALOG` gone after it.
+    - **The volume (decision 25):** `/data/workflows` holds exactly the manifest's names and shas,
+      and the startup log's per-file lines match it. The image holds no document. A file added to
+      the volume after start is refused on its first read.
+    - **Backups:** the credential store, client table and journal backed up and a restore
+      rehearsed; the signing key in Doppler's history.
+    - **Each app, separately (go-live step 10):**
+      - Claude connected from claude.ai through "Use your own OAuth client" with a blank secret,
+        then used from the Claude iOS app.
+      - ChatGPT connected on the web with its static client id, recording whether a blank secret is
+        accepted (verify item 27), then used from the ChatGPT iOS app.
+      - For each, recorded rather than assumed:
+        - the `Origin` header its backend sends on `initialize`, if any, before `allowed_origins`
+          freezes (verify item 26);
+        - that it discovers through the 401's header;
+        - which scopes it requests;
+        - that `/token` receives a form-encoded body and answers well inside 10 seconds;
+        - the protocol revision it negotiates (verify item 34);
+        - that `state` round-trips;
+        - which browser context `/authorize` opens in on iOS, and that the passkey ceremony, the
+          parked-request resume and the recovery-code path all work there (verify item 13);
+        - what the app does when the 3600 s token expires (verify item 32);
+        - whether ChatGPT steps up on a 403 `insufficient_scope` (verify item 28).
+    - **Then:** the stock-client run of test 18 repeated against the public domain, and one real
+      plan-approve-apply cycle against the operator's documents.
+
+    Discovery changes are allowed about five minutes to propagate, because Claude caches the
+    protected-resource metadata with "a staleness window of about five minutes".
 20. **The authorization-server metadata document and the JWKS route.** `GET
     /.well-known/oauth-authorization-server` with no credential answers **200**,
     `application/json`, and its `issuer` is **byte-identical** to `WILLIKINS_PUBLIC_URL`, which is
     the URL the well-known path was built from — the MCP MUST, and it holds by construction under
     decision 12. `code_challenge_methods_supported` is exactly `["S256"]`;
     `grant_types_supported` and `token_endpoint_auth_methods_supported` are **present** and are
-    `["authorization_code"]` and `["none"]`, never omitted to their RFC defaults;
+    `["authorization_code"]` and `["none"]`, never omitted to their RFC defaults; RFC 8414's three
+    REQUIRED members are present: `authorization_endpoint` and `token_endpoint` (each derived from
+    `WILLIKINS_PUBLIC_URL`) and `response_types_supported == ["code"]`; `scopes_supported` equals
+    the `/mcp` document's three MCP scopes exactly and never names `offline_access` or
+    `willikins:approve`;
     `authorization_response_iss_parameter_supported` is `true`; `jwks_uri` is published and
     resolves; `client_id_metadata_document_supported` is **absent**, because CIMD is not
     implemented. **No array with zero elements is serialised as `[]`** — a case per array field,
@@ -2816,8 +2883,19 @@ the test it was written about; the authorization-server half is tests 20 to 26.
     `code_challenge_method` of `plain` is refused; an unsupported method answers `invalid_request`.
     An unknown `client_id` and a `redirect_uri` outside the registered set each answer **400
     directly and are never redirected** — the phase-1 split, and a redirected phase-1 error is an
-    open redirect. A registered loopback redirect on a **different port** is accepted; the same
-    redirect on a different host or a different path is refused. The consent screen **displays the
+    open redirect. A registered loopback redirect on a **different port** is accepted, for
+    `127.0.0.1`, `[::1]` and `localhost` alike, and never across the three; the same redirect on a
+    different host or a different path is refused. A registered **non-loopback HTTPS** redirect
+    (the shape of `https://claude.ai/api/mcp/auth_callback`) is matched exactly: a different port,
+    a trailing `/` or a different path is refused. **`state`:** present → echoed byte-exact on the
+    success redirect; absent → omitted; an error redirect carries both `state` and `iss`. **No
+    session:** an `/authorize` without one parks the validated request, sends the browser to
+    `/approvals/login`, and after a `SoftPasskey` login resumes the consent screen for exactly that
+    request. The same resume id is refused from a browser without the `__Host-willikins-authorize`
+    cookie, and a full park store answers **503**. **The consent page's CSP** is
+    `form-action 'self' <the validated redirect origin>` and nothing wider; a browser check
+    (Chrome and iOS WebKit) confirms the consent POST's redirect actually lands at a registered
+    HTTPS callback (verify item 35). The consent screen **displays the
     redirect URI's hostname**, with an additional warning for a `localhost`-only redirect. `iss` is
     present on **every** response, the error responses included. A `resource` that is not the one
     canonical resource identifier is refused `invalid_target`, and the accepted one is bound into
@@ -2835,7 +2913,8 @@ the test it was written about; the authorization-server half is tests 20 to 26.
     code past `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` is refused by its **own** expiry check
     even if the store would still return it. A code redeemed by the wrong client answers
     `invalid_grant` **indistinguishably** from an unknown code, asserted on body and status
-    together. `grant_type` other than `authorization_code` is refused. The response carries **no
+    together. `grant_type` other than `authorization_code` is refused. The endpoint accepts
+    `application/x-www-form-urlencoded`, the body every client sends. The response carries **no
     `refresh_token`**, and `offline_access` appears in no metadata document.
 24. **Passkey enrollment and authentication.** Driven by `SoftPasskey`, with no browser.
     Registration enrols a credential, and a second registration of the **same `CredentialID`** — to
@@ -2869,6 +2948,48 @@ the test it was written about; the authorization-server half is tests 20 to 26.
     carries a session id. A non-safe method with `Sec-Fetch-Site: cross-site` is refused, `Vary`
     names `Sec-Fetch-Site, Origin`, and the fallback origin check still runs when the header is
     absent.
+27. **The image carries no workflow document** (decision 25, task 20). Read from the repository's
+    own `Dockerfile` and `.dockerignore`, as `crates/willikins-server/tests/it/image_contents.rs`
+    already does, because this host never builds an image. The runtime stage has exactly one
+    `COPY`, the binary's. No `COPY` reads from `workflows/`. No `ENV` sets
+    `WILLIKINS_WORKFLOWS_DIR`. `.dockerignore` excludes `workflows`, `private` and
+    `crates/willikins-cli/tests/operator_*`. The seventeen-document assertion
+    (`the_image_workflows_directory_holds_exactly_the_seventeen_positive_documents`) is replaced,
+    not relaxed, and the module doc's stale "three" goes with it. `.railway/railway.ts` carries
+    `WILLIKINS_WORKFLOWS_DIR: preserve()`, asserted by reading the file. The README's variable row
+    no longer says the image sets it, held by `readme_variables.rs`.
+28. **The trusted directory on a writable volume** (decision 25, task 21). A
+    `WILLIKINS_WORKFLOWS_DIR` that is itself a symlink to a directory of valid documents →
+    `StartupError::Symlink` at start, and the same refusal from `list_workflows` if the swap happens
+    after start. A symlinked entry is still refused. A file swapped for a symlink between the
+    `symlink_metadata` check and the open is refused by `O_NOFOLLOW`. The hash `ServerStarted`
+    records for each document equals the sha256 of the exact bytes that were parsed, asserted by a
+    test that changes the file between the two reads the old loop made. **A negative fixture placed
+    in the directory after `Butler::start` cannot be planned**: `plan` by its name refuses with the
+    same error startup would have produced, and `list_workflows` fails closed with
+    `ButlerError::Startup`, never by silently skipping the file. Startup logs one line per document
+    with its file name and short sha, a named warning for an empty directory, and a named warning
+    when `RAILWAY_VOLUME_MOUNT_PATH` is set and the directory is not beneath it. No fixture from
+    `workflows/fixtures/` is ever placed in a deployment's directory: the test builds its own
+    temporary one.
+29. **`willikins documents check`** (decision 25, task 22). Over a directory it prints one
+    `<sha256>  <file name>` line per document in `shasum -a 256` format, and the set equals
+    `ServerStarted.workflow_hashes` for a server started on the same directory. Over a directory
+    holding a negative fixture or a broken `uses:` child, it exits non-zero naming the file, with
+    the same `StartupError` a start would have produced. It writes nothing, and it refuses a
+    symlinked directory like the server does.
+30. **The approvals page shows what was planned, not what is on disk now** (decision 25, task 23).
+    A pending plan's section shows the root document's short sha beside the `used` closure's.
+    Render it, change the document's bytes on disk, and render again. The second render shows **no**
+    "document says" text and says instead that the document changed since the plan and that apply
+    will refuse it with `DocumentChanged`. Restoring the original bytes restores the description.
+31. **Teardowns on the approvals page** (decision 4, task 24). A teardown that needs approval,
+    planned through `Butler::plan_rollback`, is listed with its steps in order, every value masked
+    by `mask_json`, and its own session-bound nonce. The approver's decision journals
+    `ApprovalGranted` against the teardown's `plan_id`. A session whose `sub` is not in
+    `WILLIKINS_APPROVER_SUBJECTS` → **403** `WrongRole`. A nonce minted for a forward plan cannot
+    decide a teardown, and the reverse: both are **403** `InvalidNonce`. A teardown `plan_id` POSTed
+    with no nonce at all → **403** `InvalidNonce`, as for a plan.
 
 ## Gates
 
@@ -2884,6 +3005,12 @@ the log body rather than a captured exit code. `-j 2` and `RUST_TEST_THREADS=2` 
 on this host; never run two cargo commands at once. The conformance run (test 18) and the go-live
 checks (test 19) are `#[ignore]`d or by hand and are never part of the gate. Every Workflow
 `CONTEXT` string names these four commands and no wrapper.
+
+**Scoped runs, in 3k's form**, for the inner loop between full gates:
+`RUST_TEST_THREADS=2 cargo test -p <crate> --test it -j 2 -- <module>::`. Keep the trailing `::`.
+`--exact` needs the module prefix too (`<module>::<test_name>`); without it, it silently matches
+nothing instead of failing. A unit test inside a crate's `src/` runs with `--lib` in place of
+`--test it`. A scoped run never replaces the four gates before a commit.
 
 ## Tasks
 
