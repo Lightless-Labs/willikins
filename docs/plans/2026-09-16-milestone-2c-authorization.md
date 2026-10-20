@@ -1256,7 +1256,7 @@ new, and pass 3 must attack them at least as hard.
 | A **UV-lying** authenticator, and a **counter regression** | refused; `CredentialPossibleCompromise` on the second |
 | A flood of `GET /approvals/login` and of ceremony starts, and a flood of recovery attempts | the ceremony store stops at its cap with **503**; the session store likewise; the Argon2 semaphore bounds concurrent hashes; neither memory nor the journal grows without bound |
 | A ceremony started in one browser and finished in another | **400**: the `__Host-willikins-login` cookie does not match (decision 4) |
-| An expired session cookie, one idle past the idle timeout, and one replayed after `POST /approvals/logout` or after a credential change | **302 to `/approvals/login`** on a GET and **403** on a POST in every case, with the plan's nonce not burned |
+| An expired session cookie, one idle past the idle timeout, and one replayed after `POST /approvals/logout` or after a credential removal | **302 to `/approvals/login`** on a GET and **403** on a POST in every case, with the plan's nonce not burned |
 | A valid token whose `sub` is not in `WILLIKINS_APPROVER_SUBJECTS`, presented after login | 403 on the approve POST, `AuthFailedReason::WrongRole`, the decision not journaled as a grant, and the 403 page showing that session's own `sub` and `iss`, escaped |
 | **Added 2026-10-20.** An `/authorize` whose `state` is tampered with in transit, and one with no `state` | the callback carries the stored value byte for byte, or none; `state` is never interpreted, journaled or logged |
 | A parked `/authorize` resumed from a browser that lacks its `__Host-willikins-authorize` cookie, and a flood of parked requests | the resume resumes nothing; the park store stops at its cap with **503** |
@@ -4437,8 +4437,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       lines, while a right pair after the flood still enrols. The secret, its digest and the
       recovery codes appear in no request line, log line, journal line or error body.
     - **The CLI.** `willikins bootstrap-secret generate <file>` writes one `wkbs1_` value (the
-      prefix, 43 base64url characters and the 6-character checksum) to a new `0600` file, refuses an existing file, writes nothing to stdout or stderr, and its output
-      arms a server that is then started with it.
+      prefix, 43 base64url characters and the 6-character checksum) to a new `0600` file,
+      refuses an existing file, writes nothing to stdout or stderr, and its output arms a server
+      that is then started with it.
 
 35. **Rollback over MCP** (decision 28, task 29). Against a fake-catalog server the test builds:
     - The snapshotted tool list holds `rollback_plan` and `rollback_apply` with their schemas, and
