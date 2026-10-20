@@ -604,7 +604,8 @@ keeps `mask_json` with no reveal, and the journal keeps full values (decision b4
 
 ### 3. Scopes
 
-Four server-defined scopes, in a hierarchy, mapped onto the eight MCP tools. The specification
+Four server-defined scopes, in a hierarchy, mapped onto the ten MCP tools (eight today, plus
+decision 28's two rollback tools). The specification
 defines only the machinery — `scopes_supported`, the `scope` challenge parameter, and a client
 selection rule — names no registry and no reserved scope, and calls a wildcard or omnibus scope
 a common mistake. **Every conclusion in this decision survives the revision; one paragraph's
@@ -613,17 +614,16 @@ premise does not, and is replaced below rather than quietly kept.**
 | Scope | Tools it admits |
 | --- | --- |
 | `willikins:read` | `validate`, `describe`, `list_workflows`, `list_tools`, `propose_slug`, `run_status` |
-| `willikins:plan` | the above, plus `plan` |
-| `willikins:apply` | the above, plus `apply` |
+| `willikins:plan` | the above, plus `plan` and `rollback_plan` |
+| `willikins:apply` | the above, plus `apply` and `rollback_apply` |
 | `willikins:approve` | no MCP tool; the approvals page only |
 
-**Two rows are assigned now for tools that do not exist yet** (2026-10-20). They are the rollback
-tools of `todos/2026-10-16-rollback-over-mcp.md`, and they are keyed by the names `Butler`
+**Two rows are for the rollback tools 2c now adds** (decision 28; the rows were assigned on
+2026-10-20, before the operator pulled the tools in). They are keyed by the names `Butler`
 already journals for those calls in `ToolCalled` (`butler.rs:1300` and `:1509`):
 **`rollback_plan` → `willikins:plan`** and **`rollback_apply` → `willikins:apply`** (the
-2026-09-16 text left the second unnamed). That todo's tools must use those names, or move the
-rows. `run_status` for a teardown run stays under
-`willikins:read`. `rollback_plan` belongs with `plan` because `Butler::plan_rollback` re-observes
+2026-09-16 text left the second unnamed). Task 29's tools use exactly those names.
+`run_status` for a teardown run stays under `willikins:read`. `rollback_plan` belongs with `plan` because `Butler::plan_rollback` re-observes
 provider state when it computes a teardown (`TeardownAction::Gone` is an observed state), so it
 spends provider budget the way `plan` does. The teardown apply deletes, so it is an apply. Neither
 needs a scope of its own: every teardown already needs a human's approval, and the page's
@@ -634,9 +634,10 @@ approver role is the gate for that.
 in production until someone remembered this table. So test 7 asserts that every tool in the
 snapshotted tool list
 (`crates/willikins-server/tests/it/snapshots/it__mcp_server__the_tool_list_and_every_schema_is_snapshotted.snap`)
-has exactly one row in `oauth::scope`'s table, and that the table names no tool beyond that list
-**except the two pre-assigned rollback rows**, `rollback_plan` and `rollback_apply`. A new tool
-without a scope row then fails the gate, and so does any other row the list lacks.
+has exactly one row in `oauth::scope`'s table, and that the table names no tool beyond that list.
+Until task 29 lands the two rollback tools, the two rollback rows are the test's only exception;
+task 29 removes the exception (decision 28). A new tool without a scope row then fails the gate,
+and so does any other row the list lacks.
 
 `plan` is separated from the read tools because it is the only read-side tool that calls live
 providers and spends the organization's provider budget (GitHub, Doppler, Buildkite, SigNoz, App
@@ -964,10 +965,11 @@ A nonce is minted for one `plan_id`, and ids are never shared between kinds, so 
 nonce cannot decide a teardown, nor the reverse; test 31 asserts both directions anyway. The
 rejected alternative was deferring the view to the todo and stating that no deployed teardown
 could be approved until it landed. It was rejected because 2c rebuilds this page, and building it
-twice costs more than one section. What stays in `todos/2026-10-16-rollback-over-mcp.md` is the
-producer: an agent-callable `rollback_plan` (its scope row is fixed in decision 3) and teardown
-`run_status`. Until that lands, a teardown reaches the deployment's journal only through a
-`Butler::plan_rollback` caller, which in 2c means the tests (open question 4).
+twice costs more than one section. **The producer lands in 2c too** (settled decision 8, decision
+28): `rollback_plan` and `rollback_apply` over MCP, and teardown `run_status`. So on the
+deployment an agent plans a teardown, a human approves it here, and the agent applies it and
+polls it to completion. Until task 29, the section is exercised by tests that call
+`Butler::plan_rollback` directly.
 
 **The `WrongRole` page tells the operator their own identity.** A session whose `sub` is not in
 `WILLIKINS_APPROVER_SUBJECTS` gets a 403 page that displays that session's own `sub` and `iss`,
@@ -1199,6 +1201,9 @@ new, and pass 3 must attack them at least as hard.
 | A parked `/authorize` resumed from a browser that lacks its `__Host-willikins-authorize` cookie, and a flood of parked requests | the resume resumes nothing; the park store stops at its cap with **503** |
 | A consent page whose `form-action` would name any origin other than the validated registered redirect's | impossible by construction: the origin comes from the stored binding, never from a request field |
 | A forward plan's nonce used to decide a teardown, and the reverse | **403** `InvalidNonce` in both directions (decision 4) |
+| **Added 2026-10-20 (decision 28).** A `willikins:read` token calling `rollback_plan`, a `willikins:plan` token calling `rollback_apply`, and `rollback_apply` on a teardown nobody approved | 403 `scope="willikins:plan"`; 403 `scope="willikins:apply"`; refused `ApprovalRequired`, nothing deleted |
+| A `rollback_plan` and a teardown `run_status` result searched for a value or a whole identifier | neither appears: every identifier is a short prefix, as in every other MCP result |
+| A slow teardown applied over MCP | `rollback_apply` answers at once with a `run_id`; the request never waits on a provider |
 | An authenticated `initialize` carrying an `Origin` listed in `WILLIKINS_EXTRA_ALLOWED_ORIGINS` (a synthetic value), and one carrying an unlisted foreign `Origin` | **not 403** for the listed one; **403** for the unlisted one, so the variable widens by exactly its entries (decision 18). The real vendor origins are test 19's to record |
 | `WILLIKINS_WORKFLOWS_DIR` swapped for a symlink after start, then read by a scan and by a named load; and an entry swapped for a symlink before its open | refused: the directory's `O_DIRECTORY \| O_NOFOLLOW` open fails (`StartupError::Symlink` for a scan, `UnknownWorkflow` for a named load), and the entry's `openat(O_NOFOLLOW)` fails. A swap of the mount point's own parents is out of reach without root and is not claimed (decision 25) |
 | A document changed on the volume between plan and approval | the page shows no stale description and names the change; apply refuses `DocumentChanged` |
@@ -2872,6 +2877,52 @@ credential store is on the volume, so the CLI had no host to run on.
 
 *Pinned by test 34.*
 
+**28. Rollback over MCP: `rollback_plan`, `rollback_apply` and teardown `run_status`** (settled
+decision 8). The operator agreed to pull `todos/2026-10-16-rollback-over-mcp.md` into 2c. Decision
+3 already fixed a scope row for **both** tools (`rollback_plan` → `willikins:plan`,
+`rollback_apply` → `willikins:apply`), so both land, not the first alone. Test 7's exception for
+rows ahead of their tools goes with them. Without this decision, decision 4's teardown section
+would have no production producer: the CLI is the only other caller of `Butler::plan_rollback`,
+and it cannot reach the deployment's journal.
+
+- **`rollback_plan { run_id }`** calls `Butler::plan_rollback` with the request's `Principal`.
+  It returns the teardown's `plan_id`, its steps in order and `expires_at`, through `Masked` like
+  every other result, so every identifier is a short prefix and no value appears. **Its output
+  schema needs a view type.** `TeardownPlanResponse` derives no `JsonSchema`, because
+  `willikins_core::Teardown` has only `Serialize` (`crates/willikins-server/src/types.rs`, the
+  comment above the struct, which names this tool as future work). So task 29 adds a
+  schema-bearing `TeardownPlanView` in `types.rs`. It maps each step to its instance, its action
+  and the reason it is in the teardown: the rows the approvals page's teardown section renders
+  (task 24), so both surfaces show one shape. The tool's description says every teardown needs a
+  human's approval, at the approvals page.
+- **`rollback_apply { plan_id }`** calls `Butler::apply_rollback`. **It must not run inside the
+  request.** `apply_rollback` runs synchronously today, and its doc comment says why: "there is no
+  `TeardownRunRecord`/per-step replay view to poll yet ... A later task driving this against a
+  live provider may want to move it onto its own thread, the way `Self::apply` already does".
+  Over MCP it would run inside the 30 s request timeout (`HttpConfig::DEFAULT_REQUEST_TIMEOUT`)
+  and hold one of the 64 call permits, against live providers that delete. So task 29 does what
+  that comment anticipates. `apply_rollback` keeps its pre-run checks synchronous and refuses
+  exactly as today. Then it runs the teardown on its own thread and returns a `RunHandle`. The
+  tool returns `{ run_id, state: "running" }`, like `apply`. The CLI's `rollback` waits on the
+  handle, so its output and 3m's `rollback_r8` tests are unchanged.
+- **`run_status` answers for a teardown run too.** A new journal view, `teardown_run`, folds
+  `TeardownStarted`, `TeardownStepFinished` and `TeardownFinished` into a record of state and
+  per-step outcomes, masked like a forward run. One tool serves both kinds, because run ids share
+  one namespace, as plan ids do.
+- **Scope and approval.** The middleware's table admits each tool at its row. A `willikins:read`
+  token calling `rollback_plan` gets 403 `scope="willikins:plan"`, and a `willikins:plan` token
+  calling `rollback_apply` gets 403 `scope="willikins:apply"`. Every teardown still needs a human
+  at the approvals page (task 24's section), so an agent can plan and apply a rollback but never
+  approve one. Both tools journal `ToolCalled` with the claims, as `Butler` already does under
+  these names (`butler.rs:1300` and `:1509`).
+- **The tool-list snapshot grows by two tools**, and test 7's tie becomes exact: one row per tool
+  and no exception.
+
+Once task 29 lands, that todo has nothing left, and `todos/2026-10-16-rollback-residuals.md` is
+unchanged.
+
+*Pinned by test 35.*
+
 ## The pluggable seam
 
 The operator banked pluggable authentication as a later improvement and this milestone builds one
@@ -3217,7 +3268,10 @@ trusted-directory refusals, and decision 25's symlinked-directory refusal reuses
 
 **`mcp.rs`.** `principal_for` reads the `Principal` the OAuth middleware inserted — id plus claims,
 not a bare `PrincipalId` — and every `#[tool]` method passes it on to the `Butler` method it calls,
-which is the signature change decision 2 describes. It does **not** gain a scope refusal, because
+which is the signature change decision 2 describes. It gains two `#[tool]`s, `rollback_plan` and
+`rollback_apply` (decision 28), and `run_status` reads teardown runs too. `rollback_plan`'s output
+is the new `TeardownPlanView` in `types.rs`, because `TeardownPlanResponse` has no `JsonSchema`,
+and `Butler::apply_rollback` moves its run onto its own thread and returns a `RunHandle`. It does **not** gain a scope refusal, because
 an authorization refusal is a transport-level status in the specification's table rather than a
 domain error, and a tool result cannot carry one (decision 3).
 
@@ -3295,10 +3349,12 @@ break the replay the whole discipline exists to guarantee — and no field becom
 `RefreshFamilyRevoked` when an operator revoked the family from the approvals page. The three claim
 fields land on all nine.
 
-**One read-side view is added**: `pending_teardowns`, beside `pending_approvals_view`
-(`crates/willikins-journal/src/journal.rs:295`), folding teardowns that need a decision the same way
-that view folds plans (decision 4, task 24). It is a fold over existing events, with no new
-event and no new field.
+**Two read-side views are added.** `pending_teardowns`, beside `pending_approvals_view`
+(`crates/willikins-journal/src/journal.rs:295`), folds teardowns that need a decision the same way
+that view folds plans (decision 4, task 24). `teardown_run` folds `TeardownStarted`,
+`TeardownStepFinished` and `TeardownFinished` into the per-step record teardown `run_status`
+returns (decision 28, task 29). Both are folds over existing events, with no new event and no new
+field.
 
 Three fixtures replay unchanged through `Journal` and through `willikins_journal::replay`: both
 existing ones and the new `pre-2c-every-event.jsonl`. `post-pass-2-new-shapes.jsonl`, which pass 2
@@ -3582,9 +3638,10 @@ at the test it was written about. The authorization-server half is tests 20 to 2
    22's, because task 11 builds it (moved there by the 2026-10-20 review). **The table is tied to
    the tool list:** every tool in
    `tests/it/snapshots/it__mcp_server__the_tool_list_and_every_schema_is_snapshotted.snap` has
-   exactly one row in `oauth::scope`'s table, the table names no tool beyond the list and the
-   pre-assigned rollback rows (`rollback_plan` → `willikins:plan`, `rollback_apply` →
-   `willikins:apply`), and a fixture tool list carrying an unknown tool fails the assertion.
+   exactly one row in `oauth::scope`'s table, the table names no tool beyond the list, and a
+   fixture tool list carrying an unknown tool fails the assertion. Until task 29 the two rollback
+   rows (`rollback_plan` → `willikins:plan`, `rollback_apply` → `willikins:apply`) are allowed
+   ahead of their tools; from task 29 on there is no exception (decision 28).
 8. **Principal and journal.** The same `(iss, sub)` always derives the same
    `oauth-<12 hex>` principal and two different subjects never collide; the principal parses
    under `PrincipalId`'s grammar for a `sub` containing `|`, `:` and non-ASCII characters, and for
@@ -4054,6 +4111,23 @@ at the test it was written about. The authorization-server half is tests 20 to 2
       new `0600` file, refuses an existing file, writes nothing to stdout or stderr, and its output
       arms a server that is then started with it.
 
+35. **Rollback over MCP** (decision 28, task 29). Against a fake-catalog server the test builds:
+    - The snapshotted tool list holds `rollback_plan` and `rollback_apply` with their schemas, and
+      test 7's tie holds with no exception.
+    - A `willikins:plan` token's `rollback_plan` on a finished run returns a teardown `plan_id`,
+      its steps in order and `expires_at`, through `TeardownPlanView`, with every identifier
+      masked, and journals `ToolCalled` as `rollback_plan` with the claim fields. The teardown
+      then appears on the approvals page (test 31).
+    - `rollback_apply` before approval is refused `ApprovalRequired`. After a session approves the
+      teardown on the page, `rollback_apply` with a `willikins:apply` token returns
+      `{ run_id, state: "running" }` at once, even against a provider stub that blocks for longer
+      than the request timeout.
+    - `run_status` on that `run_id` reports `running` and then the finished per-step outcomes,
+      masked, from the `teardown_run` view.
+    - A `willikins:read` token calling `rollback_plan` → **403** `scope="willikins:plan"`; a
+      `willikins:plan` token calling `rollback_apply` → **403** `scope="willikins:apply"`.
+    - The CLI's `rollback` still prints the finished result, and `rollback_r8` passes unchanged.
+
 ## Gates
 
 ```
@@ -4129,6 +4203,7 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 9 | **Passkey enrollment and authentication, and the gate swap.** `webauthn-rs` wiring, the durable credential store at `/data/credentials/`, ceremony-to-account binding, UV Required, counter regression and `update_credential`, `exclude_credentials` and CredentialID uniqueness, the uniform username step, the inline script under a CSP nonce, logout, the `WrongRole` page (showing `sub` whole), and the **mint → `oauth::validate` → session** hop. **Removes `basic_auth`, `TokenHash`, `matches_any` and the constant-time compare, and retires `WILLIKINS_APPROVER_TOKEN_HASH` in this series**, so no commit on `main` has an unauthenticated `/approvals` and none has two gates on it. Drops `HttpConfig::build`'s `approver_hash` parameter at all 13 call sites. Flips the three `adversarial_10b.rs` pins named below and migrates every approvals test from Basic to a session through a new `tests/common` login helper (counted below). **Every `/approvals`-level assertion is this task's.** Pinned by: tests 9, 10, 11, 24, and test 12's approver-hash retirement, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_login:: passkey:: adversarial_10b:: http_server:: composition_s3::` | 8 | **sonnet test-first, opus attacks**: CVE-2026-69199's class lives here |
 | 23 | **The approvals page shows what was planned** (decision 25): the root's short sha beside the `used` closure, and "document says" only while the file's sha equals `record.document_sha256`, otherwise the `DocumentChanged` notice. Pinned by: test 30, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_document_identity::` | 9 | sonnet test-first, opus attacks |
 | 24 | **Teardowns on the approvals page** (decision 4): `pending_teardowns` in `willikins-journal`, the teardown section through `mask_json`, session-bound nonces for teardown `plan_id`s, the same role rules. Pinned by: test 31, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` and `cargo test -p willikins-server --test it -j 2 -- approvals_teardowns:: rollback_r8::` | 9, 6 | sonnet test-first, opus attacks |
+| 29 | **Rollback over MCP** (decision 28, settled decision 8). The `rollback_plan` and `rollback_apply` `#[tool]`s in `mcp.rs`, taking the request's `Principal`; `TeardownPlanView` in `types.rs`, a schema-bearing view of a teardown's steps, shared in shape with task 24's section; `Butler::apply_rollback` moved onto its own thread behind its unchanged synchronous pre-run checks, returning a `RunHandle`, with the CLI's `rollback` waiting on it; the `teardown_run` view in `willikins-journal` and `run_status` answering for a teardown run; the tool-list snapshot regenerated with both tools; test 7's rollback exception removed; the tool descriptions saying a teardown needs a human at the approvals page. Pinned by: test 35, test 7, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- mcp_rollback:: mcp_server:: oauth_scopes:: rollback_r8::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` | 24, 7 | sonnet test-first, opus attacks: `rollback_apply` deletes |
 | 10 | **Recovery codes and the second credential.** **Its CLI half is replaced by task 28** (settled decision 6): the enrollment and break-glass subcommand, its one-time enrollment URL and its token rules are not built. What stays: codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule, with the passkey session's "add a passkey" and "revoke a credential" account actions (decision 4); the restricted recovery session (enrol a passkey and revoke credentials, nothing else), journaled; `CredentialEnrolled` for `Session` and `Recovery`. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes:: approvals_login::` | 9 | sonnet, verified by opus |
 | 28 | **The one-time bootstrap secret** (decision 27, settled decision 6), replacing task 10's enrollment CLI on every host. `WILLIKINS_BOOTSTRAP_SECRET`: the 43-character base64url minimum and `HttpConfigError::WeakBootstrapSecret`, kept only as a SHA-256 digest and compared with `subtle`. The spent list in the credential store, synced before the passkey is committed; `ServerStarted.bootstrap`; the WARN line for a spent value left set, naming the variable only. `/bootstrap`: 404 unless armed, the secret-and-name form, the allowlist check, one ceremony at a time under `__Host-willikins-bootstrap`, the atomic claim at finish, recovery codes shown once, no session, approval, consent or token. The failure bucket and the per-reason journal bucket; `BootstrapSecretMismatch`; `CredentialEnrolled` with `Bootstrap`. `willikins bootstrap-secret generate <file>` in `willikins-cli`. The README's first-enrolment and break-glass sections, and its variable row. Pinned by: test 34, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- bootstrap::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- bootstrap_secret::` | 10 | **sonnet test-first, opus attacks**: it is the one static secret 2c keeps |
 | 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. `ServerStarted.clients_sha256`, and `--clients <file>` on `willikins documents check`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. The table's optional `refresh_tokens` key is parsed here and has no effect until task 26. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
@@ -4138,7 +4213,7 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 13 | Bracket-aware port stripping in the origin check, the one real defect (`approvals.rs:276-284`: `rsplit_once(':')` cuts `[::1]` to `[:`). Pinned by: test 14, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- origin_ipv6::` | 11 | sonnet |
 | 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state`, the bootstrap secret and its digest, the signing key, and refresh tokens and their hashes at `/token`, `/revoke` and in the family store (decision 26), after replacing `TraceLayer::new_for_http()`'s default span with a custom `MakeSpan` that records the path only, never the query (decision 8), and correcting `http/mod.rs`'s comment about what the default logs. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12, 26, 27, 28 | sonnet, swept by opus |
 | 15 | Move the concurrency permit into the blocking closure. Pinned by: test 16, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- blocking_pool_13::` | 12 | sonnet |
-| 16 | **Adversarial pass 3**, against the foreign-issuer fixture and against willikins' own endpoints: decision 7's whole table, recorded under `docs/research/`, plus the 2026-10-20 surfaces. Those are `state` tampering and omission; a parked request resumed from another browser; the consent CSP widened beyond the one origin; a forward-plan nonce against a teardown and the reverse; a symlinked or swapped workflows directory; a document changed between plan and approval; and the synthetic listed-origin row of `WILLIKINS_EXTRA_ALLOWED_ORIGINS`. The 2026-10-20 review's rows join them: the consent POST forgeries, the restricted recovery session, the username and `/token` floods, and the scope-widening redemption. The 2026-10-20 answers add decision 26's rows: refresh reuse, concurrent rotation, wrong-client and widened refreshes, both lifetimes, a restart between refreshes, `/revoke`'s four answers and its flood, forged connection revokes, and the token-value sweep; the rotation lines join the fold measurement. Decision 27's bootstrap rows replace the enrollment-token row. Freeze `post-2c-new-shapes.jsonl`. Test 17 | 12, 13, 14, 15, 21, 22, 23, 24, 26, 27, 28 | **opus** |
+| 16 | **Adversarial pass 3**, against the foreign-issuer fixture and against willikins' own endpoints: decision 7's whole table, recorded under `docs/research/`, plus the 2026-10-20 surfaces. Those are `state` tampering and omission; a parked request resumed from another browser; the consent CSP widened beyond the one origin; a forward-plan nonce against a teardown and the reverse; a symlinked or swapped workflows directory; a document changed between plan and approval; and the synthetic listed-origin row of `WILLIKINS_EXTRA_ALLOWED_ORIGINS`. The 2026-10-20 review's rows join them: the consent POST forgeries, the restricted recovery session, the username and `/token` floods, and the scope-widening redemption. The 2026-10-20 answers add decision 26's rows: refresh reuse, concurrent rotation, wrong-client and widened refreshes, both lifetimes, a restart between refreshes, `/revoke`'s four answers and its flood, forged connection revokes, and the token-value sweep; the rotation lines join the fold measurement. Decision 27's bootstrap rows replace the enrollment-token row, and decision 28's rollback rows join them. Freeze `post-2c-new-shapes.jsonl`. Test 17 | 12, 13, 14, 15, 21, 22, 23, 24, 26, 27, 28, 29 | **opus** |
 | 17 | Bound the header read: replace `axum::serve` with a `hyper::server::conn::http1` accept loop (timer first, decision 8) carrying graceful shutdown and connection accounting; flip the pass-2 slowloris test. Runs **after** pass 3, with a short pass-3 addendum recording that the transport changed under it. Pinned by: test 13, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: http_server:: http_smoke::` | 16 | sonnet, verified by opus |
 | 18 | **The conformance run.** The `live-tests` feature and its own `[[test]]` target (outside `tests/it/`, as 3k allows), and the harness that drives a stock local MCP client through discovery, `/authorize`, `/token` and `list_tools` against a locally bound server, unregistered and registered, and, with the local entry's `refresh_tokens: true`, one refresh after the access token is made to expire. Test 18 | 17 | sonnet writes the harness, run with the operator |
 | 25 | **The invariant's wording** (decision 25): the "trusted ref" invariant re-founded, edited together in `CLAUDE.md` and `AGENTS.md`; a design-doc addendum beside `docs/plans/2026-09-11-willikins-design.md`'s "a checkout of a trusted ref"; and the written rule that only the operator writes the volume, in both files and in memory. The wording is the one decision 25 proposes, **approved by the operator on 2026-10-20** (settled decision 7), and it lands byte-identical in both files. No code | 20 | coordinator |
@@ -4232,7 +4307,7 @@ header at `GET /approvals`; that becomes the 302 of decision 4, with no challeng
 **The new test modules named above are this plan's choice of spelling**: `pre_2c_replay`,
 `oauth_validation`, `oauth_metadata`, `oauth_principal`, `oauth_scopes`, `session_core`,
 `approvals_login`, `passkey`, `recovery_codes`, `bootstrap`, `bootstrap_secret`, `refresh_tokens`,
-`token_revocation`, `issuer_key`, `issuer_authorize`,
+`token_revocation`, `mcp_rollback`, `issuer_key`, `issuer_authorize`,
 `issuer_token`, `origin_ipv6`, `log_sweep`, `trusted_directory_volume`, `documents_check`,
 `approvals_document_identity` and `approvals_teardowns`. An implementer may rename one, and the
 plan's cell moves with it. A filter that matches nothing passes silently, so each task's first
@@ -4489,7 +4564,7 @@ passkey ceremony endpoints. Before this
 revision the only anonymous surfaces were the protected-resource-metadata document and a 401.
 
 *What a bug in issuance buys an attacker* (recomputed 2026-10-20 from today's catalog): a token
-minted with the operator's `sub` and `willikins:apply`. That is the eight MCP tools against every
+minted with the operator's `sub` and `willikins:apply`. That is the ten MCP tools against every
 provider the deployment holds a credential for, one organization or workplace each, until
 milestone 3's credential routing lands. Since milestone 2, `apply` has grown well past reading and
 setting secrets:
@@ -4502,8 +4577,8 @@ setting secrets:
 - SigNoz.
 - App Store Connect: bundle identifiers, capabilities and provisioning profiles, signed with keys
   documents read from Doppler.
-- 3m's teardown, which **deletes**. It is reachable over MCP only once the rollback tools land,
-  and it always needs a human's approval.
+- 3m's teardown, which **deletes**. It is reachable over MCP through `rollback_apply` since
+  decision 28, and it always needs a human's approval.
 
 **Bounded by three things that do not depend on the issuing code being correct.** An unlisted
 `sub` is refused in the middleware before any tool runs (decision 3). Anything `apply` touches
@@ -4742,9 +4817,9 @@ Then, in descending order of how likely each is to surprise someone:
   may not preserve, and it can only be built once verify item 18 is settled. Not built in 2c.
   (OpenAI also says "ChatGPT presents an OpenAI-managed client certificate". Railway's edge
   terminates TLS, so that certificate needs nothing from willikins.)
-- **Rollback over MCP**, `todos/2026-10-16-rollback-over-mcp.md`. 2c pre-assigns the scope rows
-  (decision 3) and builds the approvals page's teardown view (decision 4), so what remains is the
-  `rollback_plan` tool, teardown `run_status`, and their schemas in the tool-list snapshot.
+- **Rollback over MCP landed in 2c** (settled decision 8, decision 28), which closes
+  `todos/2026-10-16-rollback-over-mcp.md` once task 29 passes. What milestone 3 inherits is
+  `todos/2026-10-16-rollback-residuals.md`, unchanged.
 - **A document upload endpoint: not without its own design.** Decision 25 builds none. If one is
   ever wanted, it is a new privileged surface, and it starts from three requirements: its own scope,
   its own approval, and its own adversarial pass.
