@@ -42,6 +42,13 @@ labels were only about how they reached the reviser; these are the operator's re
 5. a ChatGPT client secret: "Only if its actually needed";
 6. ChatGPT on iOS: "They can. Might have to set it up on the desktop app or web, but no reason it won't work";
 7. recovery-code sessions restricted to enrolling a passkey: "Agreed".
+**Addendum:** 2026-10-20 (task 1) — verify item 2 was settled without the "inspect the image" step
+its own text named: this host's Docker (`colima`, `vz` driver) cannot start a VM at all
+("Virtualization is not available on this hardware"), and an anonymous blob `GET` against
+`gcr.io` (the manifest route answers; the blob route, which redirects to GCS, does not) times out
+with no first-hop response. Settled instead by reading `distroless`'s own build definition at the
+last commit before it dropped `debian12` support — a stronger primary source than the README
+item 2 used to distrust. See item 2's own text for the citation.
 
 The defaults the two review passes chose, which the operator may still overrule (the coordinator
 took them as written, 2026-10-20): the in-house subject is an account name the operator picks; a
@@ -4698,10 +4705,24 @@ says so in the decision rather than waiting on a fetch.
    `willikins-providers-http`), and Railway's builder is the build proof. `aws_lc_rs` stays
    untested, and it would be a workspace-wide switch with the `g++` blocker the pinned-dependencies
    section records.
-2. **Task 1: whether `gcr.io/distroless/cc-debian12` ships the `libssl.so.3` that `openssl-sys`
-   0.9.114 links against.** The distroless README names no libssl version at all and was fetched
-   from `main` rather than a tag. **Build-blocking**, and the weakest citation in either note.
-   Inspect the image.
+2. **Settled 2026-10-20 by task 1: `gcr.io/distroless/cc-debian12` ships `libssl3`, which provides
+   `libssl.so.3`.** This host cannot build or inspect the image directly: Docker (`colima`, `vz`
+   driver) refuses to start with `VZErrorDomain Code=2, "Virtualization is not available on this
+   hardware"`, and an anonymous registry blob `GET` against `gcr.io` times out with no first-hop
+   response (the manifest endpoint itself answers fine; only the blob route, which redirects to
+   GCS, does not). Settled instead from the build definition itself, a stronger primary source
+   than the README this item used to distrust for being unversioned and fetched from `main`:
+   `base/config.bzl` at commit `b105d3858691c056fca3cc29ca6e33060ca3f2ef` (2026-08-11, the last
+   commit before "Remove debian12 builds") reads
+   `BASE_PACKAGES["debian12"] = ["libc6", "libssl3"]`, against `BASE_NOSSL_PACKAGES["debian12"] =
+   ["libc6"]` — distroless draws an explicit nossl/ssl line, and `base-debian12` is the `libssl3`
+   side of it. `cc/config.bzl` at the same commit adds only `["libgomp1", "libstdc++6",
+   "libgcc-s1", "gcc-12-base"]`, and `cc/cc.bzl`'s `cc_image` sets `base = "//base:base..."`, so
+   `cc-debian12` is `base-debian12` plus those four, never fewer. `main` moved to `debian13`
+   (`libssl3t64`, the 64-bit-time_t rename) on the commit after, which is why this reads a
+   commit instead of `main`. Not settled: the exact bookworm point version of `libssl3`; the
+   first Railway build of this commit (already task 1's own "Pinned by" cell) is what confirms
+   the soname actually links, same as before.
 3. **Task 1b: whether `cargo update -p rmcp --precise 3.4.0` resolves and the four gates pass.**
    The `ServerInfo` rename at three sites is the only breakage identifiable statically; 3.4.0's
    cancellation and pre-init changes were not verified against willikins' stateless configuration.
