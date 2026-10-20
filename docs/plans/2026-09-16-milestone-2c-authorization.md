@@ -122,8 +122,8 @@ app on iOS, against the public domain. Loopback redirects remain for local clien
   and the confused-deputy MUSTs — a per-user registry of approved `client_id`s consulted before
   forwarding upstream — do not apply. Credential routing across several GitHub organizations and
   Doppler workplaces is milestone 3's work, which is the same reason.
-- **Multi-tenancy.** One server still serves one GitHub organization and one Doppler workplace
-  until milestone 3's credential routing. The public deployment changes who can reach the server,
+- **Multi-tenancy.** One server still serves one organization or workplace per provider
+  credential (GitHub, Doppler, Buildkite, SigNoz) until milestone 3's credential routing. The public deployment changes who can reach the server,
   not how many tenants it serves.
 - **Multi-replica sessions and a shared session store.** `.railway/railway.ts` pins one replica,
   which is what makes an in-memory session store correct at all. Scaling out needs a shared store
@@ -1034,6 +1034,14 @@ new, and pass 3 must attack them at least as hard.
 | A ceremony started in one browser and finished in another | **400**: the `__Host-willikins-login` cookie does not match (decision 4) |
 | An expired session cookie, one idle past the idle timeout, and one replayed after `POST /approvals/logout` or after a credential change | **302 to `/approvals/login`** on a GET and **403** on a POST in every case, with the plan's nonce not burned |
 | A valid token whose `sub` is not in `WILLIKINS_APPROVER_SUBJECTS`, presented after login | 403 on the approve POST, `AuthFailedReason::WrongRole`, the decision not journaled as a grant, and the 403 page showing that session's own `sub` and `iss`, escaped |
+| **Added 2026-10-20.** An `/authorize` whose `state` is tampered with in transit, and one with no `state` | the callback carries the stored value byte for byte, or none; `state` is never interpreted, journaled or logged |
+| A parked `/authorize` resumed from a browser that lacks its `__Host-willikins-authorize` cookie, and a flood of parked requests | the resume resumes nothing; the park store stops at its cap with **503** |
+| A consent page whose `form-action` would name any origin other than the validated registered redirect's | impossible by construction: the origin comes from the stored binding, never from a request field |
+| A forward plan's nonce used to decide a teardown, and the reverse | **403** `InvalidNonce` in both directions (decision 4) |
+| A vendor backend's `initialize` carrying an `Origin` header | **not 403**: the measured origin is in `allowed_origins` (decision 18), and no other foreign origin is |
+| `WILLIKINS_WORKFLOWS_DIR` swapped for a symlink after start, and an entry swapped between check and open | refused, `StartupError::Symlink` and `O_NOFOLLOW` respectively (decision 25) |
+| A document changed on the volume between plan and approval | the page shows no stale description and names the change; apply refuses `DocumentChanged` |
+| A non-canonical `WILLIKINS_PUBLIC_URL` (uppercase host, `:443`, trailing `/`) | startup refuses with `NonCanonicalUrl`; no deployment publishes an identifier Claude's canonical `resource` cannot match |
 
 Every bypass pass 3 finds becomes a fixture plus a test, as in passes 1 and 2, and the pass is
 recorded under `docs/research/` with the same shape.
@@ -1071,9 +1079,9 @@ items and where each one went are in the out-of-scope list above.
   with its own short pass-3 addendum — see the task table. *Task 17, test 13.*
 - **Make the origin check IPv6-aware** (its item 2). The approvals Origin/Referer parser is not
   bracket-aware, which is pointless to fix until an origin can be a bracketed literal and
-  necessary once one can. Decision 4's trailing-`/` rule and its "block when neither `Origin` nor
-  `Referer` is present" rule land in the same task, because they are the same parser. *Task 13,
-  test 14.*
+  necessary once one can. Decision 4's exact-match and "refuse when neither `Origin` nor
+  `Referer` is present" rules already ship (corrected 2026-10-20), so they are pinned in test 14
+  beside the fix rather than changed. *Task 13, test 14.*
 - **The log level story, with a sweep of rmcp's own debug output** (its item 3, finding 10).
   Milestone 2's trust boundary 5 made INFO the ceiling because no level could be raised; this
   task gives the operator `WILLIKINS_LOG` (a `tracing_subscriber` filter directive, defaulting to
