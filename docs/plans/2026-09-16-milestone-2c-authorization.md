@@ -127,7 +127,9 @@ The service gets a public domain and becomes its own authorization server. An MC
 metadata documents willikins publishes and learns where to get a token. The human behind that
 client authenticates to willikins itself — no third-party account anywhere, and no vendor identity
 product a self-hoster would inherit — consents at a page willikins renders, and the client receives
-an access token willikins minted with this server as its audience. willikins then validates that
+an access token willikins minted with this server as its audience, plus, for a client its table
+entry allows, a rotating refresh token that keeps it connected without a passkey every hour
+(decision 26). willikins then validates that
 token **on the same fixed-order path it would validate any other token**, on every request, and
 never forwards it anywhere. The operator approves a plan by logging in with the same identity in a
 browser instead of typing a Basic-auth password the browser then stores. The static bearer hashes
@@ -161,24 +163,27 @@ and uses it from iOS, and this sentence stands as written.
 
 ## Out of scope
 
-- **Refresh tokens.** Not issuing them is conformant — MCP says clients "MUST NOT assume refresh
-  tokens will be issued; the authorization server retains discretion" — and it deletes the only
-  stateful authorization-server requirement there is: rotation with reuse detection and family
-  revocation. Decision 21 states the cost it buys instead.
+- **Refresh tokens moved into scope on 2026-10-20** (settled decision 5, decision 26). What stays
+  out of scope: sender-constraining them (DPoP and mTLS, below), a reuse grace window (unless
+  verify item 39 finds a client that needs one), and refresh tokens for a client whose table entry
+  does not allow them.
 - **Client ID Metadata Documents, and dynamic client registration.** CIMD is graded SHOULD and is
   worth adding when a named client needs one; dynamic registration is graded MAY, explicitly
   deprecated, and should not be built at all. Decision 23 prices both.
-- **A revocation endpoint (RFC 7009).** A case-insensitive search for "revoke" across all five
-  fetched MCP authorization pages returns zero hits and RFC 8414 makes `revocation_endpoint`
-  OPTIONAL. With short-lived tokens and no refresh tokens, the leak window is the token lifetime.
+- **Revoking an access token.** RFC 7009's `/revoke` is in scope for refresh tokens (decision
+  26), whose support it makes a MUST. Its access-token half is a SHOULD and is not built: a `jti`
+  denylist would be a second stateful store on the validation path of every request, and access
+  tokens stay short instead (3600 s, settled decision 4). `/revoke` answers an access token with
+  `unsupported_token_type` rather than a 200 that would claim a revocation that did not happen.
 - **Consent persistence** ("remember this client"). No requirement, and one consent click per
   authorization is a feature at this size rather than a cost.
 - **Token introspection (RFC 7662) and opaque access tokens.** RFC 7662 was not fetched at all, and
   an introspection round trip sits inside a handler with a 30 s budget on every single request.
   This milestone issues and validates RFC 9068 JWTs, which is what makes introspection unnecessary.
-- **Sender-constrained tokens.** RFC 9449 (DPoP) and RFC 8705 (mutual-TLS) were named by fetched
-  text but not fetched. Bearer tokens over the edge's TLS are what the specification's own
-  transport section describes.
+- **Sender-constrained tokens**, access and refresh alike. RFC 9449 (DPoP) and RFC 8705
+  (mutual-TLS) were named by fetched text but not fetched. Bearer tokens over the edge's TLS are
+  what the specification's own transport section describes, and for refresh tokens RFC 9700
+  §4.14.2 accepts rotation as the alternative, which decision 26 builds.
 - **OIDC discovery, ID tokens, and pushed authorization requests (RFC 9126).** RFC 8414 alone
   satisfies MCP's discovery MUST and is the cheaper branch; the rest were never MUSTs.
 - **A per-user upstream OAuth flow to GitHub or Doppler.** Operator-provisioned credentials still
@@ -230,11 +235,13 @@ no longer describe the system while still being cited as though they did.
    asserts it rather than prose. Tests 1, 2, 3.
 1b. **The authorization-server boundary, and it is new.** willikins holds exactly **one** live
    signing key pair, two only during a rotation overlap. It mints RFC 9068 access tokens for
-   **one** audience. It issues **no** refresh token and runs **no** `/register`. It publishes only
-   the public half, at `jwks_uri`. The private key never leaves the process, never reaches the
+   **one** audience. It issues a refresh token only to a client whose table entry allows one:
+   opaque, stored only as a hash, single-use, rotated, bound to client, subject, scopes and
+   resource, and revocable (decision 26). It runs **no** `/register`. It publishes only the public
+   half, at `jwks_uri`. The private key never leaves the process, never reaches the
    journal, a log line or an error body, and has a redacted `Display` and `Debug` and no
    `Serialize` — the `Credential`/`Value` discipline the codebase already enforces, applied to a
-   signing key. Tests 20, 21, 22, 23.
+   signing key. Tests 20, 21, 22, 23, 32, 33.
 2. **The inbound token is a credential for this server and for nothing else.** It is never
    attached to any provider request (GitHub, Doppler, Buildkite, SigNoz, App Store Connect or any
    later one), never exchanged for an upstream token, never written to the journal, a log line or
@@ -258,7 +265,9 @@ no longer describe the system while still being cited as though they did.
    `clippy.toml`'s reason and in `crates/willikins-core/tests/it/expose_secret_guard.rs`, and its
    single caller is held by its own `clippy.toml` `disallowed-methods` entry. The delegating draft's
    `Credential::authorize_basic` does not exist, because decision 4 removes the client and its
-   secret together. Test 6.
+   secret together. **An inbound refresh token is held to the same rule** (decision 26): it is
+   hashed as soon as `/token` or `/revoke` parses the form, its bytes are zeroized, and it is not a
+   secret domain type, so it adds no `expose_secret` site. Test 6.
 3. **Two surfaces, two credential kinds, two configured allowlists.** `/mcp` accepts an
    `Authorization: Bearer` access token and never a session cookie. `/approvals` accepts a session
    cookie and never a bearer token — it does not so much as look at an `Authorization` header.
@@ -445,7 +454,8 @@ the `WWW-Authenticate` header on your `401` response". MCP 2026-07-28: "Clients 
 scopes provided in the challenge as authoritative". A read-only first token leaves every `plan` and
 `apply` waiting on a step-up, and that costs four things:
 
-- Each step-up is another passkey consent, because no refresh token is issued (decision 21).
+- Each step-up is another passkey consent, because a refresh can only narrow a grant, never
+  widen it (decision 26).
 - Claude documents step-up on an HTTP 403 with a challenge.
 - OpenAI documents re-linking only through per-tool `securitySchemes` plus a tool result carrying
   `_meta["mcp/www_authenticate"]` (developers.openai.com/plugins/build/auth.md: "Without both
@@ -727,7 +737,8 @@ scope hierarchies, where a broader scope implies narrower ones, when deciding wh
 sufficient for an operation" — so a token carrying only `willikins:apply` satisfies a `describe`
 call. **The `/mcp` document's `scopes_supported` lists the three MCP scopes** —
 `willikins:read`, `willikins:plan` and `willikins:apply` — and never `offline_access`, which that
-revision tells protected resources not to advertise and which decision 21 does not issue anyway.
+revision tells protected resources not to advertise and which decision 26 does not need, because
+a refresh token follows the client's table entry rather than a scope.
 (Until 2026-10-20 it also listed `willikins:approve`.) MCP describes the list as "the minimal set
 of scopes necessary for basic functionality", and Claude requests all of it when a challenge
 carries no `scope`. `willikins:approve` admits no MCP tool, so advertising it on the resource it
@@ -870,7 +881,7 @@ bolted on after a session shape has been frozen in tests.
    and the two are compared in constant time on every request, flushing the session on mismatch.
    **This is the revocation the delegating draft's Risks section admitted it did not have**:
    changing or removing a credential now kills every live session for that account, without a
-   redeploy.
+   redeploy. Since decision 26 it also revokes every refresh family of that account.
 
 **`Sec-Fetch-Site`, and the origin check.** OWASP now lists Fetch Metadata as a first-class CSRF
 defence with a **mandatory** fallback to origin verification, which willikins already has. So it is
@@ -879,8 +890,9 @@ purely additive: a non-safe method is refused **unless `Sec-Fetch-Site` is `same
 `Sec-Fetch-Site, Origin`. (The 2026-09-16 text refused only `cross-site`. The 2026-10-20 review
 pointed out that the threat this decision names is a sibling host, whose forged POST arrives as
 `same-site` and would have passed.) The rule covers every non-safe method on a browser surface:
-the approve and reject POSTs, the consent POST, the ceremony and recovery finish endpoints, and
-logout. `/token` is not a browser surface and is exempt; it is called server to server. **The two "fixes" this paragraph used to list are already
+the approve and reject POSTs, the consent POST, the ceremony and recovery finish endpoints, the
+connection-revoke POSTs (decision 26), and logout. `/token` and `/revoke` are not browser
+surfaces and are exempt; they are called server to server. **The two "fixes" this paragraph used to list are already
 how the code behaves** (corrected 2026-10-20; both have been in place since 0e329eb, 2026-09-15).
 `extract_authority` splits on `/`, `?` and `#`, and `host_matches`
 (`crates/willikins-server/src/http/approvals.rs:276`) compares exactly and case-insensitively, so
@@ -916,7 +928,12 @@ POST on a same-origin page that navigates onward with script. It needs a second 
 gains nothing over naming the one origin. Whether Chrome and iOS WebKit then follow the redirect is
 measured by test 22's browser check (verify item 35), not assumed.
 
-**Logging out.** `POST /approvals/logout` drops the session record and clears the cookie.
+**Logging out.** `POST /approvals/logout` drops the session record and clears the cookie. It
+revokes no refresh family: the browser session and an app's connection are different things.
+
+**Connections.** An approver's passkey session also sees decision 26's Connections section,
+listing every live refresh family and revoking one or all, under the nonce and origin rules
+above.
 
 **Pending teardowns are on the rebuilt page too** (2026-10-20, 3m). `Butler::decide`
 (`crates/willikins-server/src/butler.rs:748`) already accepts either kind of id: it tries
@@ -957,6 +974,8 @@ has re-authenticated in front of since. The idle lifetime is
 `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS`, default 300, and is capped the same way. Sessions,
 ceremonies and authorization codes are in memory and are therefore lost on a redeploy, exactly as
 the nonces already are; the README gains a line saying so, next to the existing recovery notes.
+Refresh families are not: they are on the volume, so an app stays connected across a redeploy
+(decision 26).
 
 *Pinned by tests 9, 10, 11, 26 and 31.*
 
@@ -1018,7 +1037,8 @@ workflows directory *is* about the trusted directory, so it belongs here, and it
 **`SymmetricAlgorithm`**, **`CannotVerifyOwnTokens`**, **`SessionOutlivesApprovalWindow`**,
 **`InsecureUrl`**, **`NonCanonicalUrl`** (decision 12), **`EmptyAllowlist`** and
 **`CodeTtlAboveCeiling`** (an authorization-code lifetime above draft-16's 600-second ceiling,
-decision 21); a required variable that is simply unset keeps reusing
+decision 21) and **`RefreshLifetimes`** (refresh lifetimes out of order or above their ceiling,
+decision 26); a required variable that is simply unset keeps reusing
 `ConfigError::Missing { variable }` (`crates/willikins-server/src/config.rs:33`), which is the
 shape `build_http_config` already reaches for.
 
@@ -1027,7 +1047,7 @@ produced by the pure `HttpConfig::build`, which runs *before* the tokio runtime 
 anything has touched the filesystem (see the ordering note under the task table). So the refusals
 that need the runtime or the disk go on `cli.rs`'s own `StartError`, beside `Bind` and
 `NoBindOrPort`: **a configured signing key that cannot be loaded**, **the credential store cannot
-be read or written**, and **the client table cannot be read or is malformed** (decision 23). (The
+be read or written** (it now holds the refresh families too, decision 26), and **the client table cannot be read or is malformed** (decision 23). (The
 2026-09-16 text said "no signing key is configured and none can be generated or written", which
 described the volume branch settled decision 2 did not take. An unset key is
 `ConfigError::Missing`, like any other required variable.) The delegating draft put `JwksUnavailable` there for
@@ -1169,6 +1189,15 @@ new, and pass 3 must attack them at least as hard.
 | An enrollment URL used after 15 minutes, replayed, or against another account | refused in each case; the token appears in no request line, log line or journal line |
 | A sustained flood of username steps for invented accounts, and one naming the real account | no ceremony-store slot for the invented ones, so a real login still starts; the real account's flood stops at its per-account cap; the residual `/authorize` lockout is **measured** and recorded |
 | A flood of junk `/token` POSTs, then a valid redemption | the valid code is redeemed: the bucket counts failures per `client_id` after the claim |
+| **Added 2026-10-20 (decision 26).** A rotated refresh token presented again, by its own client | `invalid_grant` `RefreshTokenReused`; the whole family is revoked, so the current token is refused too |
+| One refresh token redeemed **twice concurrently** | exactly one rotation succeeds; the other is a reuse and revokes the family |
+| A refresh token presented by another client, and one from a family whose client lost `refresh_tokens: true` or whose `sub` left `WILLIKINS_AGENT_SUBJECTS` | `invalid_grant` in each case, indistinguishable from an unknown token; the family is revoked |
+| A refresh with a wider `scope`, and one with a different `resource` | `invalid_scope`; `invalid_target` `ResourceWidened`; the family's stored set and resource are what any token carries |
+| A refresh after the idle timeout, after the absolute lifetime, and an access token minted on the family's last day | `invalid_grant` `RefreshTokenExpired` for the first two; the access token's `exp` is never past the family's absolute expiry |
+| A server restart between two refreshes | the family survives and rotates: it is on the volume |
+| `/revoke` with another client's refresh token, with an access token, and with an unknown value; then a flood | 400 `invalid_grant` and nothing revoked; 400 `unsupported_token_type`; 200; the flood counts per `client_id` and a valid revocation still lands |
+| A forged connection-revoke POST, one from a recovery session, and one with another session's nonce | **403** in each case; no family is revoked |
+| A refresh token or its hash searched for in every journal line, log line and error body | absent everywhere, at every log level |
 
 Every bypass pass 3 finds becomes a fixture plus a test, as in passes 1 and 2, and the pass is
 recorded under `docs/research/` with the same shape.
@@ -1328,16 +1357,18 @@ are inserted after them.)
    compares the two. Any local client the operator uses gets an entry with its loopback URIs; a
    Claude Code entry registers both `http://localhost:<port>/callback` and
    `http://127.0.0.1:<port>/callback` (decision 20). The client ids are the operator's to pick (for
-   example `claude-hosted` and `chatgpt`), except decision 21's reserved ceremony id. The file
-   follows decision 23's schema. The table lives outside `workflows/`, where a non-document YAML
+   example `claude-hosted` and `chatgpt`), except decision 4's reserved ceremony id. The two
+   hosted entries carry `refresh_tokens: true` (decision 26); a local entry carries it only if the
+   operator wants that client to stay connected. The file follows decision 23's schema. The table lives outside `workflows/`, where a non-document YAML
    would refuse startup.
 6. **One variable change, before the deploy that needs it, with `.railway/railway.ts` in the same
    change.** In a single staged edit:
    - set the whole new block: `WILLIKINS_PUBLIC_URL` (step 1's canonical value), the
      credential-store and client-table paths, both subject allowlists (step 4a's subjects), and
-     the four lifetimes (`WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`,
-     `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS`, `WILLIKINS_SESSION_TTL_SECONDS` and
-     `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS`), or leave a lifetime unset to take its default;
+     the six lifetimes (`WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`,
+     `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS`, `WILLIKINS_SESSION_TTL_SECONDS`,
+     `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS`, `WILLIKINS_REFRESH_TOKEN_IDLE_TIMEOUT_SECONDS` and
+     `WILLIKINS_REFRESH_FAMILY_LIFETIME_SECONDS`), or leave a lifetime unset to take its default;
      `WILLIKINS_EXTRA_ALLOWED_ORIGINS` stays unset until step 10 finds a vendor `Origin`
      (decision 18), and gets its `preserve()` row only when it is set;
    - **inject `WILLIKINS_SIGNING_KEY_PEM` through Doppler's Railway integration in this same
@@ -1411,7 +1442,10 @@ are inserted after them.)
    backups; their schedule and restore rules are quoted in decision 25 and stay a verify item
    until a restore has been rehearsed. **Documents are not restored from a volume backup.** A
    restore rewinds the journal and the credential store along with them. Documents are recovered
-   by re-publishing the tag from the operator's checkout (decision 25). Railway allows one volume
+   by re-publishing the tag from the operator's checkout (decision 25). **A restore also rewinds
+   the refresh families** (decision 26): a family revoked after the backup point comes back to
+   life. So every restore ends with the Connections section's revoke-all, and each app reconnects
+   with one passkey consent. Railway allows one volume
    per service, no replicas with a volume, and downtime on redeploy. The mount path is `/data`,
    taken from `.railway/railway.ts` (verify item 12, settled for that half).
 10. **Connect the apps** (rewritten 2026-10-20 against the vendors' pages, fetched that day:
@@ -1439,7 +1473,9 @@ are inserted after them.)
       invoke it in a conversation by typing `@` and selecting it. Then use it from the ChatGPT iOS
       app, which the operator reports works once the connector exists (settled decision 10).
 
-    Each connection is one passkey consent at `/authorize`.
+    Each connection is one passkey consent at `/authorize`. With `refresh_tokens: true` on its
+    entry, the next is due when the family ends: after 14 idle days, after 30 days, or on a reuse
+    or a revocation (decision 26).
 11. **Record the tenancy.** The live service serves **one organization or workplace per provider
     credential**: one GitHub organization, one Doppler workplace, one Buildkite organization, one
     SigNoz host. That holds until milestone 3's credential routing lands. The operator runs
@@ -1574,8 +1610,10 @@ visible in the first log line rather than a year later. **One consequence of the
 to be stated rather than left for someone to trip over:** on the in-house path a host move also
 moves the `iss`, and check 4 refuses an old-host token before check 5 ever reads `aud` — so the
 variable does *not*, on its own, keep old tokens working across a willikins-to-willikins host move.
-It does not need to: a host move orphans every passkey anyway (sibling two), and with no refresh
-tokens every outstanding access token expires within `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`. Where
+It does not need to: a host move orphans every passkey anyway (sibling two), every outstanding
+access token expires within `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`, and every refresh family is
+bound to the old resource and is refused at the new host's `/token` (decision 26), so each app
+reconnects once. Where
 the variable does its work is the **adapter** path, where the issuer is somebody else's and does
 not move when willikins does. Pass 3 attacks it in that shape: a token for a previous audience is
 accepted only while the variable lists it, and rejected the moment it does not. A second issuer
@@ -1752,7 +1790,10 @@ optional in practice, each for a fetched reason:
   Their RFC 8414 defaults describe a server willikins is not: omitting the first defaults to
   `["authorization_code", "implicit"]`, a grant OAuth 2.1 deletes; omitting the second defaults to
   `client_secret_basic`, which makes every public client appear unsupported. willikins emits
-  `["authorization_code"]` and `["none"]`.
+  `["authorization_code", "refresh_token"]` and `["none"]` (the second grant since decision 26).
+- **`revocation_endpoint` and `revocation_endpoint_auth_methods_supported: ["none"]`** (decision
+  26), the second emitted explicitly for the same reason: RFC 8414 says that if it is omitted,
+  "the default is "client_secret_basic"".
 - **`authorization_response_iss_parameter_supported: true`**, which RFC 9207 §2.3 makes a MUST for
   any server that supports the parameter, and decision 20 does.
 - **`jwks_uri`**, published and served. RFC 8414 makes it OPTIONAL and MCP requires no JWKS at all
@@ -1774,7 +1815,9 @@ grant types are supported that use the authorization endpoint"; and `token_endpo
 unless only the implicit grant type is supported". willikins emits
 `response_types_supported: ["code"]` and both endpoint URLs, derived from `WILLIKINS_PUBLIC_URL`.
 **The document also publishes `scopes_supported`**, with the same three MCP scopes as the `/mcp`
-document and never `offline_access` or `willikins:approve` (decision 3). Claude's 403 step-up
+document and never `offline_access` or `willikins:approve` (decision 3). Refresh tokens do not
+change that: they follow the client's table entry, not a scope, and verify item 38 is the one
+condition under which `offline_access` would join this list alone (decision 26). Claude's 403 step-up
 falls back to "the authorization server metadata's `scopes_supported`", so the two documents must
 agree, and test 20 asserts that they do. (The 2026-09-16 text also cited OpenAI here through an
 ellipsis that changed its subject. The whole sentence is about OIDC scopes: "If your provider
@@ -1837,7 +1880,8 @@ discipline willikins already applies with domain newtypes, and the shape prior a
      names (decision 1).
   2. `willikins:approve` and every value outside the four scopes (`openid`, `offline_access`, a
      typo) are **dropped**, never an error on their own; draft-16 §1.4.1 lets the server "fully or
-     partially ignore the scope requested".
+     partially ignore the scope requested". Dropping `offline_access` withholds nothing: whether a
+     refresh token is issued is the client's table entry, not a scope (decision 26).
   3. The consent screen lists what remains and lets the human **narrow** it, never widen it: the
      selection is intersected with the stored requested set, so a forged POST cannot add a scope.
   4. If the result is empty, the request ends in an `invalid_scope` error redirect, carrying
@@ -1867,7 +1911,9 @@ discipline willikins already applies with domain newtypes, and the shape prior a
   hostname display is the only thing standing between a human and an attacker-registered redirect.
   The screen presents the requested MCP scopes of the grant rule above, read from the same table
   the middleware uses, and requires a session, which is the second consumer decision 4 gives the
-  human session. Its CSP widens `form-action` to the one validated redirect origin (decision 4).
+  human session. For a client whose entry has `refresh_tokens: true`, it also says that the
+  client will stay connected for up to the family lifetime (30 days by default) unless it is
+  revoked on the approvals page (decision 26), so a long-lived grant is never consented to unseen. Its CSP widens `form-action` to the one validated redirect origin (decision 4).
 - **The consent POST is CSRF-bound, and carries no authorization parameter** (2026-10-20 review).
   RFC 6749 §10.12: "The authorization server MUST implement CSRF protection for its authorization
   endpoint and ensure that a malicious client cannot obtain authorization without the awareness
@@ -1941,8 +1987,10 @@ with private-address and loopback refusal, HTTPS only and a 5 KB cap — not a g
 *Pinned by tests 7, 22.*
 
 **21. `/token`, the authorization code, and its six stored bindings.** `POST /token` accepts
-`grant_type=authorization_code` and nothing else: each grant not implemented is one that cannot be
-attacked.
+`grant_type=authorization_code` and, since decision 26, `grant_type=refresh_token`, and nothing
+else: each grant not implemented is one that cannot be attacked. This decision is the code grant;
+decision 26 is the refresh grant, with the same response shape and the same client
+identification.
 
 - **The code is single-use, claimed by an atomic get-and-remove**, with a lifetime capped at
   draft-16's RECOMMENDED maximum of 10 minutes and **its own expiry checked independently of any
@@ -1977,8 +2025,9 @@ attacked.
   introduce.
 - **The response is pinned** (2026-10-20 review). Success is 200, `application/json`,
   `Cache-Control: no-store`, with exactly `access_token`, `token_type: "Bearer"`, `expires_in`
-  (`WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`) and `scope` (the stored granted set), and no
-  `refresh_token`. draft-16 makes `expires_in` RECOMMENDED, and Claude needs it: "Claude refreshes
+  (`WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`) and `scope` (the stored granted set), plus
+  `refresh_token` exactly when the client's table entry has `refresh_tokens: true` (decision 26),
+  and no other member. draft-16 makes `expires_in` RECOMMENDED, and Claude needs it: "Claude refreshes
   tokens reactively on a `401` response, and proactively up to five minutes before the stored
   expiry" (claude.com/docs/connectors/building/authentication.md, fetched 2026-10-20). An error is
   RFC 6749 §5.2's JSON body, `{"error": "<code>"}` with no `error_description` that could become
@@ -1993,7 +2042,10 @@ attacked.
 - **Clients are public; `token_endpoint_auth_method` is `"none"`; there is no client secret
   anywhere in the deployment.** Every client this deployment serves is a public client. That
   covers local MCP clients with loopback redirects, and also the two hosted apps the operator
-  named. Anthropic: "Leave the secret blank unless your authorization server requires one".
+  named. Anthropic: "Leave the secret blank unless your authorization server requires one". The
+  operator kept this design: a ChatGPT client secret only if it is actually needed (settled
+  decision 9), so the confidential-client delta is a fallback built only if verify item 27 or 37
+  fails live.
   OpenAI says token-endpoint method `none` applies to "CIMD, DCR, and predefined OAuth clients"
   (whether ChatGPT's static-credential form accepts a blank secret is verify item 27). draft-16
   accepts a public client given mandatory PKCE. (The earlier text justified this with loopback
@@ -2004,22 +2056,11 @@ attacked.
   client-secret surface disappears rather than moving.
 - **A code redeemed by the wrong client answers `invalid_grant` indistinguishably from an unknown
   code**, which turns a wrong-client redemption into a non-oracle.
-- **No refresh token is issued, and `offline_access` is never advertised.** MCP says clients "MUST
-  NOT assume refresh tokens will be issued; the authorization server retains discretion", and
-  protected resources "SHOULD NOT include `offline_access`". Not issuing them is conformant and it
-  **deletes the only stateful authorization-server requirement there is** — rotation with reuse
-  detection and family revocation — which is also where every one of the fetched corpus's worst
-  problems lived. The cost is named rather than hidden: the access-token lifetime becomes exactly
-  how often a human re-consents at `/authorize` (settled decision 4), and an operator who believes a
-  token leaked waits that lifetime out, because there is no revocation endpoint either. **On the
-  phone use case that put 2c on the critical path, that means a passkey round trip every 3600 s.**
-  Both apps refresh reactively on a 401 (Anthropic: "Claude refreshes tokens reactively on a `401`
-  response, and proactively up to five minutes before the stored expiry"), and with nothing to
-  refresh they must re-run OAuth. Whether either app does that inline or flips the connector to
-  "Reconnect" is verify item 32, recorded by test 19. The decision is the operator's and is not
-  changed here (open question 1). The ways out are those of
-  `todos/2026-09-16-unattended-agents-token-longevity.md`. If refresh is ever added, Anthropic
-  requires rotation for public clients: "Rotate refresh tokens for public-client connections".
+- **Refresh tokens are decision 26's.** Until 2026-10-20 this bullet said none is issued, which
+  kept the authorization server stateless beyond the code store at the price of a passkey consent
+  every 3600 s from the phone. The operator chose to pay for the store instead (settled decision
+  5). What survives from the old bullet is its last line, now a requirement decision 26 meets.
+  Anthropic: "Rotate refresh tokens for public-client connections".
 
 *Pinned by test 23.*
 
@@ -2100,6 +2141,7 @@ catalog snapshot or the `list_tools` catalog JSON.
   `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS` and the rotation window are one number and one decision
   (settled decision 4). The *schedule* is deferrable and the *mechanism* is not: retrofitting the
   ability to publish two keys at once means a flag day in which every outstanding token is refused.
+  Refresh tokens are opaque and unsigned (decision 26), so a key rotation never touches a family.
 
 *Pinned by tests 5, 21.*
 
@@ -2123,10 +2165,12 @@ a registered redirect, so it gets the same integrity rules as the documents:
 clients:
   - id: claude-hosted
     name: Claude
+    refresh_tokens: true                  # decision 26; omitted means false
     redirect_uris:
       - https://claude.ai/api/mcp/auth_callback
   - id: chatgpt
     name: ChatGPT
+    refresh_tokens: true
     redirect_uris:
       - https://chatgpt.com/connector_platform_oauth_redirect   # provisional until go-live step 10
   - id: claude-code-local
@@ -2136,9 +2180,11 @@ clients:
       - http://127.0.0.1:8080/callback    # both forms, for the reason decision 20 gives
 ```
 
-- The keys are exactly `clients`, and per client `id` (a `ClientId`), `name` and `redirect_uris`;
-  an unknown key is refused, as `deny_unknown_fields` does. A per-client lifetime would be a new
-  key, not an existing one (open question 1).
+- The keys are exactly `clients`, and per client `id` (a `ClientId`), `name`, `redirect_uris`
+  and the optional boolean `refresh_tokens`, default `false` (decision 26). An unknown key is
+  refused, as `deny_unknown_fields` does. A per-client lifetime would be a new key, not an
+  existing one. Turning `refresh_tokens` off for a client takes effect at the next restart, and
+  that client's families are then refused and revoked at their next refresh.
 - A redirect is `https://` with a host, or `http://` on `localhost`, `127.0.0.1` or `[::1]`, with
   no fragment. Each client has at least one. A duplicate `id`, and the reserved
   `willikins-approvals` (decision 4), are refused. An empty table starts with a named warning,
@@ -2317,7 +2363,7 @@ is fixed here, so that no two tenants of the one volume can collide:
 | `/data/journal.jsonl` | the journal (`WILLIKINS_JOURNAL_PATH`) | the server |
 | `/data/workflows/` | the documents: flat, `.yaml`/`.yml` only, never descended into | the operator, by hand |
 | `/data/workflows.next/` | staging for the next document set; the server never reads it | the operator, by hand |
-| `/data/credentials/` | the passkey and recovery-code store (`WILLIKINS_CREDENTIAL_STORE_PATH`) | the server and the enrollment CLI |
+| `/data/credentials/` | the credential store (`WILLIKINS_CREDENTIAL_STORE_PATH`): passkeys, recovery codes and refresh families (decision 26) | the server and the enrollment CLI |
 | `/data/clients.yaml` | the pre-registered client table (`WILLIKINS_CLIENTS_PATH`) | the operator, by hand |
 
 The credential store and the client table must never sit inside `workflows/`: `Butler::start` scans
@@ -2515,6 +2561,198 @@ on 2026-10-20: "Approved" (settled decision 7). Task 25 lands it byte-identical 
 
 *Pinned by tests 27, 28, 29 and 30, and by test 19's volume checks.*
 
+### Three decisions the operator's 2026-10-20 answers add
+
+**26. Refresh tokens: opaque, hashed, single-use, rotated, bound, and revocable** (settled decision
+5). The earlier text called rotation with reuse detection and family revocation "the only stateful
+authorization-server requirement there is", and avoided it by issuing no refresh token. The
+operator chose to pay for it, so that the phone use case stops costing a passkey every hour. It is
+therefore specified as tightly as the code store, and for the same reason: both fetched rauthy
+regressions on a comparable server lived on the refresh path. GHSA-7qh2-3hc5-2vqp kept its client
+binding only in a claim, and a rewrite dropped the check. Issue 1645 dropped `resource` on the
+refresh path (`…-m2c-own-authorization-server.md` §6.6 and §6.7).
+
+- **Who gets one.** Only a client whose table entry says `refresh_tokens: true` (decision 23). RFC
+  9700 §4.14.2 (www.rfc-editor.org/rfc/rfc9700.txt, fetched 2026-10-20): "Authorization servers
+  MUST determine, based on a risk assessment, whether to issue refresh tokens to a certain
+  client." At go-live the two hosted entries carry it (step 5). A local client's entry carries it
+  only if the operator adds it. The ceremony hop's reserved `willikins-approvals` id never gets
+  one, because a session is not a client. Such a client receives one on every code redemption and
+  a new one on every refresh.
+- **`offline_access` is neither advertised nor needed.** MCP 2026-07-28
+  (modelcontextprotocol.io/specification/2026-07-28/basic/authorization.md, fetched 2026-10-20):
+  "MCP Servers (Protected Resources) SHOULD NOT include `offline_access` in `WWW-Authenticate`
+  scope or Protected Resource Metadata `scopes_supported`". Clients "MAY add `offline_access` to the
+  `scope` parameter of the authorization and token requests when the Authorization Server metadata
+  contains it in `scopes_supported`" and "MUST NOT assume refresh tokens will be issued; the AS
+  retains discretion". So issuance follows the client's entry, not a scope. The grant rule still
+  drops `offline_access` from a request (decision 20), and neither metadata document lists it, so
+  the two still agree (test 20).
+
+  One client fact pulls the other way and is recorded as a condition. Anthropic: "Claude also
+  appends `offline_access` when your authorization server metadata lists it in
+  `scopes_supported`, to obtain a refresh token" (claude.com/docs/connectors/building/authentication.md,
+  fetched 2026-10-20). Nothing fetched says Claude ignores a refresh token it did not ask for. Its
+  token-refresh section ("Claude refreshes tokens reactively on a `401` response, and proactively
+  up to five minutes before the stored expiry") reads as using whatever it holds, and OpenAI says
+  only "Access and refresh tokens can still expire or rotate normally"
+  (developers.openai.com/plugins/build/auth.md, fetched 2026-10-20). Verify item 38 records what
+  each app does. If either keeps or uses a refresh token only after asking for `offline_access`,
+  the delta is additive:
+  - list `offline_access` in the RFC 8414 document only, never in the `/mcp` document or a
+    challenge;
+  - accept it in the grant rule as a marker that admits no tool;
+  - and test 20's agreement rule becomes "the authorization server's list is the `/mcp` list plus
+    `offline_access`".
+- **Opaque, high-entropy, and stored only as a hash.** A refresh token is 256 bits from the OS
+  CSPRNG, base64url without padding: 43 characters with no `.`, so it can never be mistaken for a
+  compact JWS. RFC 9700 §4.14.1 asks "that refresh tokens cannot be generated, modified, or
+  guessed". The store keeps the token's SHA-256, never the value. At this entropy a fast hash is
+  the right one (Argon2 is for decision 24's shorter look-up secrets). Lookup is by hash, so there
+  is no comparison loop to time. RFC 9700's implementation note allows encoding the grant in the
+  token if a signature protects it; willikins does not, so the token carries nothing, and a copy
+  of the store yields no usable token.
+
+  **It is not a secret domain type.** The value exists once, in the token response body. An
+  inbound one is hashed as soon as the form is parsed, and its bytes are zeroized. Neither path
+  reads a secret's bytes through `expose_secret`, so the signing key's stays the one new exception
+  (trust boundary 2), and test 6's and test 15's sweeps cover the value.
+- **A family, durable, on the volume.** Each code redemption by such a client starts a family. A
+  family record holds:
+  - a random 128-bit family id, derived from no token and safe to journal;
+  - the bindings below;
+  - its creation time, its absolute expiry and its last-use time;
+  - the hash of its one current token, and the hashes of every token it has rotated past.
+
+  Families live in the credential store directory (`WILLIKINS_CREDENTIAL_STORE_PATH`, decision
+  25's layout). Each change is written, flushed and synced, then renamed into place, before any
+  response that depends on it leaves the server. A family is pruned once its absolute expiry has
+  passed. In memory, families would die on every redeploy, which on a volume-backed service is
+  every deploy, and the hourly re-consent would come back.
+- **The bindings, in the store, re-checked at every refresh: `client_id`, `sub`, the granted
+  scope set and `resource`.** RFC 9700 §4.14.2: "If refresh tokens are issued, those refresh
+  tokens MUST be bound to the scope and resource servers as consented by the resource owner."
+  draft-16 §4.3: "The authorization server MUST maintain the binding between a refresh token and
+  the client to whom it was issued." In order, at `grant_type=refresh_token`:
+  1. The `client_id` arrives in the body, or as Basic with an empty password, exactly as at code
+     redemption (decision 21). It must equal the family's. RFC 6749 §5.2's `invalid_grant`
+     covers a refresh token that "was issued to another client". So a token presented by another
+     client answers `invalid_grant`, indistinguishable from an unknown one, journals
+     `RefreshClientMismatch` and **revokes the family**: the token has left the client it was
+     issued to.
+  2. The client must still be in the table with `refresh_tokens: true`, or the answer is
+     `invalid_grant` and the family is revoked.
+  3. The family's `sub` must still be in `WILLIKINS_AGENT_SUBJECTS`. Otherwise the answer is
+     `invalid_grant`, the journal says `UnlistedSubject`, and the family is revoked. Removing a
+     subject therefore ends its connections, rather than leaving them rotating uselessly.
+  4. `scope` is optional. draft-16 §4.3.1: "The requested scope MUST NOT include any scope not
+     originally granted by the resource owner, and if omitted is treated as equal to the scope
+     originally granted by the resource owner." A narrower request mints a narrower access token.
+     Anything wider is `invalid_scope`. The new refresh token keeps the family's set, as §4.3.3
+     requires: "If a new refresh token is issued, the refresh token scope MUST be identical to
+     that of the refresh token included by the client in the request." A refresh never widens.
+  5. `resource`, when present, must equal the family's, or the answer is `invalid_target` and the
+     journal says `ResourceWidened`. The access token's `aud` is the family's resource, never a
+     request value, so a host move orphans every family (decision 12).
+- **Single-use, with rotation and reuse detection, strictly.** Every successful refresh returns a
+  new access token and a new refresh token in one response, and the presented token dies.
+  Anthropic: "If you rotate, return the new refresh token in the same response that invalidates
+  the old one". RFC 9700 §4.14.2, for public clients, which every client here is: "Authorization
+  servers MUST utilize one of these methods to detect refresh token replay by malicious actors for
+  public clients". Of rotation it says: "If a refresh token is compromised and subsequently used by
+  both the attacker and the legitimate client, one of them will present an invalidated refresh
+  token, which will inform the authorization server of the breach. The authorization server cannot
+  determine which party submitted the invalid refresh token, but it will revoke the active refresh
+  token. This stops the attack at the cost of forcing the legitimate client to obtain a fresh
+  authorization grant." So a token found among the family's rotated hashes revokes the whole
+  family, current token included, answers `invalid_grant` and journals `RefreshTokenReused`.
+
+  Rotation is one atomic claim under the store's lock, the same discipline as the code's
+  get-and-remove: two concurrent refreshes with one token yield one success, and the other is a
+  reuse. **The cost is stated rather than softened.** If a client's refresh response is lost in
+  transit and the client retries with the same token, it loses its family and its human goes back
+  to a passkey. A grace window that tolerates one retry is the common softening, and it is not
+  built, because it is exactly the window an attacker races. Verify item 39 records whether either
+  app retries. If one does, the delta is a grace window of a few seconds that accepts only the
+  immediately previous token, once, from the same `client_id`. A refresh is one hash lookup, one
+  durable write and one signature. Anthropic allows "up to 30 seconds for refresh token requests",
+  and a refresh answers well inside that.
+- **Lifetimes.** Access tokens stay at `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`, 3600 s (settled
+  decision 4), and that is still the window of a leaked access token, because access tokens are
+  not revoked (below). A family has two lifetimes of its own:
+  - **An idle timeout, `WILLIKINS_REFRESH_TOKEN_IDLE_TIMEOUT_SECONDS`, default 1,209,600 (14
+    days).** RFC 9700 §4.14.2: "Refresh tokens SHOULD expire if the client has been inactive for
+    some time ... The expiration time is at the discretion of the authorization server." Each
+    successful rotation bumps it. *Why 14 days:* the operator's cadence is occasional
+    provisioning, not daily use ("Someone won't provision a new project five times a day", the
+    longevity todo). Claude refreshes only when the connector is used, reactively on a 401 or near
+    expiry. So an idle window shorter than the gap between uses would turn the refresh token back
+    into a re-consent. Two weeks covers a fortnightly user, and an abandoned or stolen-but-unused
+    token dies inside it.
+  - **An absolute family lifetime, `WILLIKINS_REFRESH_FAMILY_LIFETIME_SECONDS`, default 2,592,000
+    (30 days),** fixed at the family's creation and never extended. It is the longest a human goes
+    without presenting a passkey to willikins for that client. It is also the only bound on a
+    thief who keeps a stolen token fresh while the legitimate client is idle, which reuse
+    detection cannot see. The price is a monthly passkey consent per app, against an hourly one
+    before. No access token minted by a refresh outlives its family's absolute expiry: its `exp`
+    is the earlier of the two.
+  - Startup refuses idle and absolute values that are not in the order access-token lifetime <
+    idle ≤ absolute, or an absolute above 7,776,000 s (90 days). The refusal is
+    `HttpConfigError::RefreshLifetimes`, naming the rule. The 90-day ceiling is this plan's
+    choice; no specification sets one.
+- **Revocation: three paths end a family, and each is journaled.**
+  - **`POST /revoke`, RFC 7009.** It is published as `revocation_endpoint`, with
+    `revocation_endpoint_auth_methods_supported: ["none"]` emitted explicitly, because RFC 8414's
+    default for an omitted list is "client_secret_basic". The body is form-encoded with `token`
+    required. `token_type_hint` is ignored, as RFC 7009 §2.1 permits ("An authorization server
+    MAY ignore this parameter"). The client is identified as at `/token`, and a non-empty secret
+    is 401 `invalid_client`. RFC 7009 §2: "Implementations MUST support the revocation of refresh
+    tokens and SHOULD support the revocation of access tokens".
+    - A refresh token of the calling client revokes its whole family and answers 200.
+    - An unknown token answers 200. RFC 7009 §2.2: "The authorization server responds with HTTP
+      status code 200 if the token has been revoked successfully or if the client submitted an
+      invalid token."
+    - A refresh token of another client is refused, 400 `invalid_grant`, and nothing is revoked.
+      RFC 7009 §2.1: the server "verifies whether the token was issued to the client making the
+      revocation request. If this validation fails, the request is refused".
+    - **An access token is not revocable.** A `token` in compact-JWS shape answers 400
+      `unsupported_token_type`, which RFC 7009 §2.2.1 defines as "The authorization server does
+      not support the revocation of the presented token type." That is the honest answer. A 200
+      would tell the client a token was revoked that will keep validating until its `exp`. Access
+      tokens stay short instead, as settled decision 5 asks, and a revoked family mints no more. A
+      `jti` denylist is the delta, in Notes for milestone 3.
+    - `/revoke` is anonymous, so it carries `/token`'s bound: `Cache-Control: no-store`, the
+      lookup before the bucket, and a per-`client_id` bucket counting requests that revoked
+      nothing. Its refusals pass decision 1's per-reason journal bucket.
+  - **The operator's revoke, on the approvals page.** A passkey session whose `sub` is in
+    `WILLIKINS_APPROVER_SUBJECTS` sees a **Connections** section. It lists each live family's
+    client id and display name, subject, creation, last use, idle and absolute expiry, and a short
+    family id, and never a token or a hash. Each family has a revoke button, and one more revokes
+    all of them. Each is a POST bound by the session-bound nonce, under decision 4's
+    `Sec-Fetch-Site` and origin checks. A recovery session cannot reach it (settled decision 11).
+    It is not a CLI command: the image is distroless and the store is on the volume, which is the
+    reasoning that retired the enrollment CLI (decision 27).
+  - **A credential revocation revokes the account's families.** RFC 9700 §4.14.2: "Authorization
+    servers MAY revoke refresh tokens automatically in case of a security event, such as:
+    password change or logout at the authorization server." Revoking a passkey, from a passkey
+    session or a recovery session, revokes every family of that subject. Logging out of the
+    approvals page does not, because the browser session and the app connections are different
+    things.
+- **Journaled, with no token value in any line.** Three new additive events:
+  - `RefreshFamilyIssued`: family id, client id, subject, scopes and absolute expiry;
+  - `RefreshTokenRotated`: family id and generation;
+  - `RefreshFamilyRevoked`: family id and a reason (`Reused`, `ClientRequest`, `Operator`,
+    `CredentialRevoked`, `ClientMismatch`, `SubjectUnlisted` or `ClientWithdrawn`), plus the
+    revoking principal, with its claim fields, when an operator revoked it.
+
+  Expiry is a fold over times, not an event. Rotation writes one line per access-token lifetime
+  per connected client, about 24 a day per app, and pass 3's fold measurement includes them. The
+  new refusals are `AuthFailedReason` variants (the journal contract). A family id is random and
+  names no token, and a token hash appears in no journal line either, because it is the token's
+  lookup key.
+
+*Pinned by tests 32 and 33.*
+
 ## The pluggable seam
 
 The operator banked pluggable authentication as a later improvement and this milestone builds one
@@ -2593,7 +2831,9 @@ costs a re-enrolment each way — a price, not a barrier, and the same price a c
 credentials valid for one authorization server will be accepted by another" — so every client
 re-registers the day the advertised server changes; CIMD ids would port, because they are
 self-hosted URLs resolved on demand, which is the one real argument for CIMD that is not about
-convenience. And the credential store, the signing key and their backups are history, not protocol:
+convenience. Refresh families do not port either: they are bound to this server's resource and
+`client_id`s, so each client re-earns one from a new authorization server. And the credential
+store, the signing key and their backups are history, not protocol:
 the seam makes the protocol swappable and it does not make the history portable.
 
 ## Pinned dependencies (new)
@@ -2798,11 +3038,19 @@ ten fields and not one of them is an authorization point.
 - `issuer::authorize` and `issuer::token` — the two endpoints, their two-phase error split, the
   consent screen and its own CSP, the parked-request store for an `/authorize` with no session,
   and `state` echoed beside `iss` on every response including errors (decisions 20, 21).
+- `issuer::refresh` — decision 26's family store in the credential store directory: 256-bit
+  opaque tokens kept as SHA-256 hashes, the four bindings, the atomic rotation claim, reuse
+  detection with family revocation, the idle and absolute lifetimes, and durable writes before
+  any response. The token value is a zeroizing string that exists once in the response body; it
+  is not a `willikins-types` secret type, so it adds no `expose_secret` site.
+- `issuer::revoke` — `POST /revoke` (RFC 7009) over `issuer::refresh`, with `unsupported_token_type`
+  for a compact-JWS `token`.
 
 **`http::approvals`** gains the human half: the passkey enrollment and authentication ceremonies,
 the durable credential store, the ceremony-to-account binding, the uniform username step, the
 inline script under a `script-src` nonce, logout, and the mint-then-validate hop that turns a
-finished ceremony into a session (decision 4). The session itself lands first, as library code, in
+finished ceremony into a session (decision 4), and the Connections section that lists and revokes
+refresh families (decision 26). The session itself lands first, as library code, in
 its own task: the signed `__Host-` cookie and jar, both bounded stores, unconditional id rotation,
 the absolute and idle timeouts, `no-store`, 128-bit ids, the non-persistent cookie,
 credential-change revocation, `X-Frame-Options`, the CSP, `Sec-Fetch-Site` and `Vary`, and
@@ -2878,7 +3126,7 @@ willikins-types -j 2`) is what proves the new type builds the way its dependents
 The new `AuthFailedReason` variants land in two batches, both additive. The validating half's
 variants land in **task 4**, with the middleware that produces them, because tests 3 to 5 assert
 them, except `UnknownTool`, which lands with the scope check in task 7; the claim fields land in task 6. The issuing half's variants land with the endpoints that
-produce them, in tasks 9, 10 and 11:
+produce them, in tasks 9, 10 and 11, and decision 26's in tasks 26 and 27:
 
 | Refusal | Produced by |
 | --- | --- |
@@ -2894,6 +3142,13 @@ produce them, in tasks 9, 10 and 11:
 | `InvalidClient` | `/token`, a non-empty client secret (decision 21; added 2026-10-20) |
 | `CeremonyAccountMismatch` | the passkey ceremonies (decision 24) |
 | `RecoveryCodeReplayed` | the recovery path (decision 24) |
+| `RefreshTokenUnknown` | `/token`, a refresh token in no family (decision 26; added by the 2026-10-20 answers, like every row below) |
+| `RefreshTokenReused` | `/token`, a token the family has rotated past; the family is revoked (decision 26) |
+| `RefreshTokenExpired` | `/token`, a family past its idle timeout or its absolute lifetime (decision 26) |
+| `RefreshTokenRevoked` | `/token`, the current token of a family already revoked (decision 26) |
+| `RefreshClientMismatch` | `/token` and `/revoke`, a refresh token presented by a client it was not issued to (decision 26) |
+| `RefreshNotAllowed` | `/token`, a family whose client left the table or lost `refresh_tokens: true` (decision 26) |
+| `UnsupportedTokenType` | `/revoke`, a `token` in compact-JWS shape (decision 26) |
 
 Every one of them is reachable by an **unauthenticated** request, so every one passes through
 decision 1's per-reason token bucket and carries its `suppressed` field when coalesced. That is the
@@ -2903,15 +3158,19 @@ Three new **optional** fields — `subject`, `issuer`, `client_id` — on every 
 `principal`, each bounded and escaped before it is written (decision 2), plus two more optional
 fields on `AuthFailed` alone: `subject`, written only for the refusal of a token that validated,
 and `suppressed`, written only on a coalesced line (decision 1). `ServerStarted` gains an optional
-`clients_sha256`, the client table's hash at that start (decision 23). No existing field changes type,
+`clients_sha256`, the client table's hash at that start (decision 23). **Three new events**, all
+additive, carry decision 26's refresh lifecycle: `RefreshFamilyIssued`, `RefreshTokenRotated` and
+`RefreshFamilyRevoked`. Each names a random family id, a client id and a subject, and never a token
+or a token's hash. No existing field changes type,
 **no variant is removed** — `InvalidCredential` and `MalformedUsername` stay in the enum and stop
 being produced, because `pre-pass-2-every-event.jsonl` carries both and removing a variant would
 break the replay the whole discipline exists to guarantee — and no field becomes required.
 
 **The events that carry a principal**, by name, so the claim fields cannot miss one. `ToolCalled`,
 `PlanRecorded`, `ApprovalGranted` and `ApprovalRejected` (field `approver`), `ApplyRefused`,
-`RunStarted`, and 3m's `TeardownPlanned` and `TeardownStarted`. The three claim fields land on all
-eight.
+`RunStarted`, 3m's `TeardownPlanned` and `TeardownStarted`, and decision 26's
+`RefreshFamilyRevoked` when an operator revoked the family from the approvals page. The three claim
+fields land on all nine.
 
 **One read-side view is added**: `pending_teardowns`, beside `pending_approvals_view`
 (`crates/willikins-journal/src/journal.rs:295`), folding teardowns that need a decision the same way
@@ -3009,8 +3268,8 @@ the journal, the credential store, the client table and the documents all live o
 | `/data/clients.yaml` | `WILLIKINS_CLIENTS_PATH` |
 | `/data/workflows/` | `WILLIKINS_WORKFLOWS_DIR` |
 
-The credential store, the client table and the journal are the first state this project has had
-to back up. Losing the credential store means every human re-enrols, and losing the signing key
+The credential store (passkeys, recovery codes and refresh families), the client table and the
+journal are the first state this project has had to back up. Losing the credential store means every human re-enrols, and losing the signing key
 (in Doppler) refuses every outstanding token. Documents are not backed up from the volume: they
 are re-published from the operator's checkout. Go-live step 9 is the backup step. Verify item 12's
 mount-path half is settled; the volume's backup and restore behaviour is verify item 36.
@@ -3033,13 +3292,15 @@ values and their shape, not their spelling.
 | `WILLIKINS_PUBLIC_URL` | none | `serve --http` | The canonical `https://` origin the service is reached at: lowercase scheme and host, no default port, no trailing `/`, no path, no query, no fragment. Anything else is refused with `HttpConfigError::NonCanonicalUrl`, checked on the raw string (decision 12). The **issuer identifier** is this value exactly; the audience is `<it>/mcp`; the RP ID is its host. Read by `oauth::config`, `oauth::metadata`, `issuer::mint`, the client-redirect matcher and the ceremonies. |
 | `WILLIKINS_SIGNING_KEY_PEM` | none | `serve --http` | The current ES256 signing key, PKCS#8 PEM, a secret whose `Display` and `Debug` print `[REDACTED <Type>]` and which has no `Serialize`. Doppler only (settled decision 2), generated by `willikins signing-key generate` (decision 22). Read by `issuer::key`. |
 | `WILLIKINS_SIGNING_KEY_RETIRING_PEM` | empty | optional | The previous signing key during a rotation overlap. Published in the JWKS, never used to sign. Two variables exist because one cannot express an overlap (decision 22). Read by `issuer::key`. |
-| `WILLIKINS_CREDENTIAL_STORE_PATH` | none | `serve --http` | The durable passkey and recovery-code store, on the volume at `/data/credentials/`, beside the journal and never inside `workflows/` (decision 25). Read by the ceremonies and the enrollment CLI. |
+| `WILLIKINS_CREDENTIAL_STORE_PATH` | none | `serve --http` | The durable credential store, a directory on the volume at `/data/credentials/`, beside the journal and never inside `workflows/` (decision 25): passkeys, recovery codes and refresh families (decision 26). Read by the ceremonies, `issuer::refresh` and the enrollment CLI. |
 | `WILLIKINS_CLIENTS_PATH` | none | `serve --http` | The pre-registered client table: client id, display name, registered redirect URIs, in decision 23's schema. On the volume at `/data/clients.yaml`, written by the operator by hand, never inside `workflows/`. Read once at startup by `issuer::clients`; a symlink or a malformed table is `StartError::ClientTable`, and a change needs a restart. |
 | `WILLIKINS_AGENT_SUBJECTS` | none | `serve --http` | Comma-separated `sub` values allowed to hold any MCP scope. Empty or unset refuses startup (decision 3). Read by `oauth::middleware::require_token`. |
 | `WILLIKINS_APPROVER_SUBJECTS` | none | `serve --http` | Comma-separated `sub` values allowed to approve. Empty or unset refuses startup. Read by the approvals decision handler. |
 | `WILLIKINS_OAUTH_ALGORITHMS` | `ES256` | optional | Comma-separated JWA names for the **validator's** allowlist. Asymmetric families only; intersected per key; must contain `ES256` (decision 15). Read by `oauth::validate`. |
 | `WILLIKINS_OAUTH_LEEWAY_SECONDS` | `60` | optional | Whole seconds of clock skew. Read by `oauth::validate`. |
-| `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS` | `3600` | optional | The access token's lifetime, which with no refresh tokens is exactly how often a human re-consents at `/authorize`, and which is also the key-rotation overlap window (decisions 21, 22; settled decision 4). Read by `issuer::mint` and by the rotation check. |
+| `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS` | `3600` | optional | The access token's lifetime. It is the window of a leaked access token, because access tokens are not revocable (decision 26); for a client without refresh tokens it is also how often a human re-consents at `/authorize`; and it is the key-rotation overlap window (decisions 21, 22; settled decision 4). Must be below the refresh idle timeout. Read by `issuer::mint` and by the rotation check. |
+| `WILLIKINS_REFRESH_TOKEN_IDLE_TIMEOUT_SECONDS` | `1209600` (14 days) | optional | How long a refresh family survives without a rotation; each rotation bumps it (decision 26). Above the access-token lifetime and at most the family lifetime, or startup refuses with `HttpConfigError::RefreshLifetimes`. Read by `issuer::refresh`. |
+| `WILLIKINS_REFRESH_FAMILY_LIFETIME_SECONDS` | `2592000` (30 days) | optional | A refresh family's absolute lifetime, fixed at creation and never extended; no access token it mints outlives it (decision 26). At most 7776000 (90 days), or startup refuses with `HttpConfigError::RefreshLifetimes`. Read by `issuer::refresh`. |
 | `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` | `60` | optional | The authorization code's own lifetime, checked independently of any store TTL. A value above **600** refuses startup, which is draft-16's RECOMMENDED maximum; the default itself is this plan's choice and no specification sets it. Read by `issuer::codes`. |
 | `WILLIKINS_SESSION_TTL_SECONDS` | `3600` | optional | The session's **absolute** lifetime, capped below `WILLIKINS_APPROVAL_WINDOW_SECONDS`; startup refuses a larger value. Read by the session store. |
 | `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS` | `300` | optional | The session's **idle** lifetime, bumped on writes and **not** on reads (decision 4). The default sits inside OWASP's fetched 2-to-5-minute range for high-value applications; the exact number is unpinned (verify item 11). Read by the session store. |
@@ -3266,7 +3527,10 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     `WILLIKINS_SESSION_TTL_SECONDS` larger than the approval window →
     `HttpConfigError::SessionOutlivesApprovalWindow`; `WILLIKINS_SESSION_IDLE_TIMEOUT_SECONDS`
     larger than it → the same refusal. `WILLIKINS_AUTHORIZATION_CODE_TTL_SECONDS` above 600 →
-    `HttpConfigError::CodeTtlAboveCeiling`. A `WILLIKINS_PUBLIC_URL` carrying a path, a query or a fragment →
+    `HttpConfigError::CodeTtlAboveCeiling`. A refresh idle timeout at or below the access-token
+    lifetime, one above the family lifetime, and a family lifetime above 7776000 →
+    `HttpConfigError::RefreshLifetimes` naming the rule (decision 26). A client-table
+    `refresh_tokens` that is not a boolean → `StartError::ClientTable`. A `WILLIKINS_PUBLIC_URL` carrying a path, a query or a fragment →
     `HttpConfigError::NonCanonicalUrl`, and so is one with an uppercase scheme or host
     (`HTTPS://h`, `https://H`), an explicit default port (`https://h:443`), or a trailing `/`
     (`https://h/`). A canonical value derives an issuer, an audience and a PRM `resource` that are
@@ -3304,7 +3568,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     authorization code, no `code_verifier` and no recovery code reaches stderr at any level the
     binary can be configured to emit. **No query string, no `state`, no parked-request resume id
     and no enrollment token** reaches it either: a case sends an `/authorize` carrying a marker
-    `state` at TRACE and asserts the marker is absent from stderr (2026-10-20 review). The sweep records what rmcp itself emits at each level;
+    `state` at TRACE and asserts the marker is absent from stderr (2026-10-20 review). **No refresh
+    token and no refresh-token hash** either (decision 26): a case rotates a family and revokes it
+    at TRACE and asserts neither value appears. The sweep records what rmcp itself emits at each level;
     anything that would print a body or a secret makes the level refused rather than the test
     relaxed.
 16. **The concurrency permit.** The 64-call bound still refuses with the kind-tagged `Busy`, and
@@ -3336,7 +3602,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     that comes back. Two halves are asserted rather than observed. An **unregistered** client
     reaches `/authorize` and is refused by name — discovery works for a stranger, registration does
     not, which is the goal's own qualification. A **registered** client completes the flow and
-    calls a tool. Then the refusals that need no minting: no token, a truncated token, a token with
+    calls a tool. With that entry's `refresh_tokens: true`, the client also refreshes once after
+    its access token is made to expire, which is the only stock-client exercise decision 26 gets
+    before test 19. Then the refusals that need no minting: no token, a truncated token, a token with
     a tampered signature, and the same token against a server started with a **different
     `WILLIKINS_PUBLIC_URL`**, which is how the audience is varied now that it is derived. The run
     is recorded, and repeated against the public domain as a step of test 19.
@@ -3377,7 +3645,12 @@ at the test it was written about. The authorization-server half is tests 20 to 2
         - that `state` round-trips;
         - which browser context `/authorize` opens in on iOS, and that the passkey ceremony, the
           parked-request resume and the recovery-code path all work there (verify item 13);
-        - what the app does when the 3600 s token expires (verify item 32);
+        - what the app does when the 3600 s token expires (verify item 32), and whether it
+          then refreshes with the refresh token it was given without asking for `offline_access`
+          (verify item 38);
+        - whether it retries a refresh with the same token after a timeout or a lost response
+          (verify item 39), whether it calls `/revoke` when its connector is removed (verify item
+          40), and how long it waits on a refresh (verify item 41);
         - whether ChatGPT steps up on a 403 `insufficient_scope` (verify item 28).
     - **Then:** the stock-client run of test 18 repeated against the public domain, and one real
       plan-approve-apply cycle against the operator's documents.
@@ -3390,7 +3663,9 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     the URL the well-known path was built from — the MCP MUST, and it holds by construction under
     decision 12. `code_challenge_methods_supported` is exactly `["S256"]`;
     `grant_types_supported` and `token_endpoint_auth_methods_supported` are **present** and are
-    `["authorization_code"]` and `["none"]`, never omitted to their RFC defaults; RFC 8414's three
+    `["authorization_code", "refresh_token"]` and `["none"]`, never omitted to their RFC defaults;
+    `revocation_endpoint` is `<WILLIKINS_PUBLIC_URL>/revoke` and
+    `revocation_endpoint_auth_methods_supported` is present and `["none"]` (decision 26); RFC 8414's three
     REQUIRED members are present: `authorization_endpoint` and `token_endpoint` (each derived from
     `WILLIKINS_PUBLIC_URL`) and `response_types_supported == ["code"]`; `scopes_supported` equals
     the `/mcp` document's three MCP scopes exactly and never names `offline_access` or
@@ -3470,8 +3745,10 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     even if the store would still return it. A code redeemed by the wrong client answers
     `invalid_grant` **indistinguishably** from an unknown code, asserted on body and status
     together. `grant_type` other than `authorization_code` is refused. The endpoint accepts
-    `application/x-www-form-urlencoded`, the body every client sends. The response carries **no
-    `refresh_token`**, and `offline_access` appears in no metadata document. **Added by the
+    `application/x-www-form-urlencoded`, the body every client sends. The response carries a
+    `refresh_token` **exactly** when the client's entry has `refresh_tokens: true`, and never for
+    one without it, whatever `scope` asked for (`offline_access` included); `offline_access`
+    appears in no metadata document (decision 26). **Added by the
     2026-10-20 review:** a token request with **no** `redirect_uri` succeeds (PKCE is the
     binding), and one whose `redirect_uri` differs from the stored value is `invalid_grant`. A
     request carrying `scope=willikins:apply` for a code consented at `willikins:read` mints a
@@ -3580,6 +3857,54 @@ at the test it was written about. The authorization-server half is tests 20 to 2
     decide a teardown, and the reverse: both are **403** `InvalidNonce`. A teardown `plan_id` POSTed
     with no nonce at all → **403** `InvalidNonce`, as for a plan.
 
+32. **Refresh tokens** (decision 26, task 26). Against a server the test builds, with one client
+    whose entry has `refresh_tokens: true` and one without:
+    - A code redemption by the first returns a `refresh_token` of 43 base64url characters with no
+      `.`; the second's response has none. The credential store holds the token's SHA-256 and
+      never its value. The journal has one `RefreshFamilyIssued` naming a family id, the client
+      and the subject, with no byte of the token or of its hash.
+    - A refresh returns a new access token and a new refresh token, and journals
+      `RefreshTokenRotated`. Presenting the old refresh token again is `invalid_grant`
+      `RefreshTokenReused` and revokes the family, after which the newest token is refused too
+      (`RefreshTokenRevoked`).
+    - Two concurrent refreshes with one token give exactly one success.
+    - A refresh with the right token and another client's id is `invalid_grant`, byte-identical
+      to an unknown token's answer, journals `RefreshClientMismatch`, and revokes the family.
+    - A narrower `scope` mints a narrower access token, and the next refresh still carries the
+      family's full set. A wider `scope` is `invalid_scope`. A different `resource` is
+      `invalid_target` `ResourceWidened`. The access token's `aud` and `sub` are the family's.
+    - A subject removed from `WILLIKINS_AGENT_SUBJECTS`, and a client whose entry lost
+      `refresh_tokens: true`, are refused at their next refresh (`UnlistedSubject`,
+      `RefreshNotAllowed`), and the family is revoked.
+    - With a test clock: a family idle past `WILLIKINS_REFRESH_TOKEN_IDLE_TIMEOUT_SECONDS`, and
+      one past `WILLIKINS_REFRESH_FAMILY_LIFETIME_SECONDS` though refreshed every hour, are
+      `RefreshTokenExpired`. A rotation bumps the idle time and never the absolute one. An access
+      token minted an hour before the absolute expiry has its `exp` at that expiry.
+    - A restart between two refreshes keeps the family, and the second refresh succeeds.
+    - A credential revoked from a passkey session revokes every family of its subject.
+    - The success body is exactly `access_token`, `token_type`, `expires_in`, `scope` and
+      `refresh_token`, with `Cache-Control: no-store`. A refresh error is `{"error":
+      "invalid_grant"}` at 400, never `invalid_request`. Anthropic: "Return RFC 6749-compliant
+      error codes when a refresh token is no longer valid: `invalid_grant`, not `invalid_request`
+      or a custom code".
+33. **Revocation** (decision 26, task 27).
+    - `POST /revoke` with the calling client's refresh token → **200**, and every token of the
+      family is refused at `/token` afterwards. The journal says `RefreshFamilyRevoked` with reason
+      `ClientRequest`.
+    - An unknown token → **200**, and nothing changes.
+    - Another client's refresh token → **400** `invalid_grant`, and nothing is revoked.
+    - A compact-JWS `token`, such as a valid access token → **400** `unsupported_token_type`, and
+      that access token still validates at `/mcp` until its `exp`.
+    - A non-empty client secret → **401** `invalid_client`. `token_type_hint` changes nothing.
+    - A flood of unknown tokens does not stop a valid revocation that follows it.
+    - **The Connections section.** An approver's passkey session lists each live family's client,
+      subject, creation, last use, both expiries and short family id, and the page's HTML contains
+      no token and no hash. Revoking one family, and revoking all, each journal
+      `RefreshFamilyRevoked` with reason `Operator` and the revoking principal's claim fields. A
+      revoke POST without its nonce, with another session's nonce, with `Sec-Fetch-Site:
+      same-site`, or from a recovery session → **403**. A session whose `sub` is not an approver
+      does not see the section.
+
 ## Gates
 
 ```
@@ -3656,14 +3981,16 @@ test file in that cell means a new `tests/it/<stem>.rs` plus its `mod <stem>;` l
 | 23 | **The approvals page shows what was planned** (decision 25): the root's short sha beside the `used` closure, and "document says" only while the file's sha equals `record.document_sha256`, otherwise the `DocumentChanged` notice. Pinned by: test 30, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- approvals_document_identity::` | 9 | sonnet test-first, opus attacks |
 | 24 | **Teardowns on the approvals page** (decision 4): `pending_teardowns` in `willikins-journal`, the teardown section through `mask_json`, session-bound nonces for teardown `plan_id`s, the same role rules. Pinned by: test 31, `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- views::` and `cargo test -p willikins-server --test it -j 2 -- approvals_teardowns:: rollback_r8::` | 9, 6 | sonnet test-first, opus attacks |
 | 10 | **Recovery codes, the enrollment CLI and the break-glass.** Codes of at least 128 bits, Argon2id, single-use and reissued after use; an Argon2 semaphore and per-account throttling, so an unauthenticated endpoint cannot be a memory-exhaustion path; the two-credential enrollment rule; the restricted recovery session (enrol a passkey, nothing else), journaled; the CLI subcommand that creates an account and prints its subject, and on a later run mints a one-time enrollment URL to stdout and journals it as loudly as an approval, with decision 24's token rules (128 bits, hashed, 15 minutes, one account, one credential, carried in the fragment, never journaled). **Where this CLI runs against a distroless deployment is open question 2**, and the task does not guess. Pinned by: test 25, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- recovery_codes::` and `cargo test -p willikins-cli --test it -j 2 -- enroll::` | 9 | sonnet, verified by opus |
-| 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. `ServerStarted.clients_sha256`, and `--clients <file>` on `willikins documents check`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. No refresh tokens. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
+| 11 | **`/authorize` and `/token`.** The pre-registered client table at `/data/clients.yaml`, with decision 23's schema and load rules and the reserved `willikins-approvals` id. The scope grant rule (absent `scope` defaults to the three MCP scopes, unknown values dropped, the human may narrow, empty is `invalid_scope`). An absent `redirect_uri` resolved only for a single registered redirect, and an absent `resource` bound to the canonical one. The two-phase error split. Exact redirect matching: loopback port relaxed for `127.0.0.1`, `[::1]` and `localhost`, never across them; hosted HTTPS redirects matched exactly. Mandatory `S256`. **`state` stored and echoed byte for byte** beside `iss` on every response, errors included. The consent screen, with the redirect hostname, the request's age and warning, its own `form-action` CSP and the approvals header set plus `Referrer-Policy: no-referrer`, and a consent POST bound by a session-bound single-use nonce that reads no authorization parameter from the body. The `/token` bucket counting failed redemptions per `client_id`. The **parked request** for an `/authorize` with no session, and its resume. `resource` → `aud`. The code record with all six bindings **stored** (the consenting `sub` and granted scopes included), `/token` minting exactly the stored set and ignoring any `scope` parameter, `redirect_uri` optional at `/token` and enforced when present, the atomic get-and-remove claim, the independent expiry check and the 600-second ceiling (`CodeTtlAboveCeiling`). The pinned token response and RFC 6749 §5.2 error bodies. Public-client authentication: an empty secret is none, a non-empty one is `invalid_client`. `ServerStarted.clients_sha256`, and `--clients <file>` on `willikins documents check`. Rate limits and `Cache-Control: no-store`. Form-encoded `/token`. `invalid_grant` indistinguishability. The table's optional `refresh_tokens` key is parsed here and has no effect until task 26. The issuing-half `AuthFailedReason` variants. Pinned by: tests 22, 23, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- issuer_authorize:: issuer_token::` | 10 | **opus writes or co-writes.** The densest security surface in the milestone |
+| 26 | **Refresh tokens** (decision 26, settled decision 5). The `refresh_token` grant at `/token`; `issuer::refresh`'s family store in the credential store directory (256-bit opaque tokens kept only as SHA-256 hashes, written durably before any response); the four bindings in the store and their order of checks; the atomic rotation claim and strict reuse detection revoking the family; the idle and absolute lifetimes, their two variables, `HttpConfigError::RefreshLifetimes`, and the access token's `exp` capped at the family's; `refresh_token` in the response exactly when the client's `refresh_tokens` is true; `grant_types_supported` gains `refresh_token`; the credential-revocation cascade; the six refresh `AuthFailedReason` variants and the three events, with no token value or hash in any line; README rows. One negative fixture per binding, as task 11's. Pinned by: test 32, test 20's grant list, test 23's `refresh_token` clause, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- refresh_tokens:: issuer_token:: oauth_metadata::` and `RUST_TEST_THREADS=2 cargo test -p willikins-journal --test it -j 2 -- event_shapes::` | 11 | **opus writes or co-writes**: the refresh path is where both rauthy regressions lived |
+| 27 | **Revocation** (decision 26). `POST /revoke` per RFC 7009 (refresh tokens revoke their family; unknown is 200; another client's is `invalid_grant`; a compact JWS is `unsupported_token_type`; public-client identification and the empty-secret rule; `no-store`; the per-`client_id` miss bucket); `revocation_endpoint` and `revocation_endpoint_auth_methods_supported: ["none"]` in the RFC 8414 document; the approvals page's Connections section, approver-only, passkey sessions only, nonce-bound revoke and revoke-all. Pinned by: test 33, test 20's revocation members, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- token_revocation:: approvals_login:: oauth_metadata::` | 26, 9 | sonnet test-first, opus attacks |
 | 12 | Delete `hash-token` from both binaries, its README section and the `hash_token` test module with its `mod` line; update the variable reference. On the `willikins` binary that means `Command::HashToken` and its doc in `crates/willikins-cli/src/main.rs` (`:124-129`, dispatched at `:164`), and `crates/willikins-cli/tests/it/serve_and_live.rs`'s `hash_token_dispatches_through_the_willikins_binary` (`:573`) flips into test 12's "exits non-zero with a usage error" case. Pinned by: test 12's last case, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- readme_variables:: binary_startup::` and `RUST_TEST_THREADS=2 cargo test -p willikins-cli --test it -j 2 -- serve_and_live::` | 11 | sonnet |
 | 13 | Bracket-aware port stripping in the origin check, the one real defect (`approvals.rs:276-284`: `rsplit_once(':')` cuts `[::1]` to `[:`). Pinned by: test 14, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- origin_ipv6::` | 11 | sonnet |
-| 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state`, the enrollment token and the signing key, after replacing `TraceLayer::new_for_http()`'s default span with a custom `MakeSpan` that records the path only, never the query (decision 8), and correcting `http/mod.rs`'s comment about what the default logs. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12 | sonnet, swept by opus |
+| 14 | Two steps, in order. (1) `WILLIKINS_LOG` as a `tracing_subscriber` `EnvFilter` directive, which flips `crates/willikins-server/tests/it/adversarial_13.rs`'s `the_binary_ignores_rust_log_and_emits_nothing_below_info` (line 1249) into its successor. (2) The sweep of everything the process emits at DEBUG and TRACE, rmcp's own output included, now also covering `/authorize`, `/token`, the ceremony endpoints, the code store, the parked-request store, `state`, the enrollment token, the signing key, and refresh tokens and their hashes at `/token`, `/revoke` and in the family store (decision 26), after replacing `TraceLayer::new_for_http()`'s default span with a custom `MakeSpan` that records the path only, never the query (decision 8), and correcting `http/mod.rs`'s comment about what the default logs. Amend milestone 2's trust boundary 5 in that plan's own addendum style. Pinned by: test 15, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: log_sweep::` | 12, 26, 27 | sonnet, swept by opus |
 | 15 | Move the concurrency permit into the blocking closure. Pinned by: test 16, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- blocking_pool_13::` | 12 | sonnet |
-| 16 | **Adversarial pass 3**, against the foreign-issuer fixture and against willikins' own endpoints: decision 7's whole table, recorded under `docs/research/`, plus the 2026-10-20 surfaces. Those are `state` tampering and omission; a parked request resumed from another browser; the consent CSP widened beyond the one origin; a forward-plan nonce against a teardown and the reverse; a symlinked or swapped workflows directory; a document changed between plan and approval; and the synthetic listed-origin row of `WILLIKINS_EXTRA_ALLOWED_ORIGINS`. The 2026-10-20 review's rows join them: the consent POST forgeries, the restricted recovery session, the enrollment token, the username and `/token` floods, and the scope-widening redemption. Freeze `post-2c-new-shapes.jsonl`. Test 17 | 12, 13, 14, 15, 21, 22, 23, 24 | **opus** |
+| 16 | **Adversarial pass 3**, against the foreign-issuer fixture and against willikins' own endpoints: decision 7's whole table, recorded under `docs/research/`, plus the 2026-10-20 surfaces. Those are `state` tampering and omission; a parked request resumed from another browser; the consent CSP widened beyond the one origin; a forward-plan nonce against a teardown and the reverse; a symlinked or swapped workflows directory; a document changed between plan and approval; and the synthetic listed-origin row of `WILLIKINS_EXTRA_ALLOWED_ORIGINS`. The 2026-10-20 review's rows join them: the consent POST forgeries, the restricted recovery session, the enrollment token, the username and `/token` floods, and the scope-widening redemption. The 2026-10-20 answers add decision 26's rows: refresh reuse, concurrent rotation, wrong-client and widened refreshes, both lifetimes, a restart between refreshes, `/revoke`'s four answers and its flood, forged connection revokes, and the token-value sweep; the rotation lines join the fold measurement. Freeze `post-2c-new-shapes.jsonl`. Test 17 | 12, 13, 14, 15, 21, 22, 23, 24, 26, 27 | **opus** |
 | 17 | Bound the header read: replace `axum::serve` with a `hyper::server::conn::http1` accept loop (timer first, decision 8) carrying graceful shutdown and connection accounting; flip the pass-2 slowloris test. Runs **after** pass 3, with a short pass-3 addendum recording that the transport changed under it. Pinned by: test 13, `RUST_TEST_THREADS=2 cargo test -p willikins-server --test it -j 2 -- adversarial_13:: http_server:: http_smoke::` | 16 | sonnet, verified by opus |
-| 18 | **The conformance run.** The `live-tests` feature and its own `[[test]]` target (outside `tests/it/`, as 3k allows), and the harness that drives a stock local MCP client through discovery, `/authorize`, `/token` and `list_tools` against a locally bound server, unregistered and registered. Test 18 | 17 | sonnet writes the harness, run with the operator |
+| 18 | **The conformance run.** The `live-tests` feature and its own `[[test]]` target (outside `tests/it/`, as 3k allows), and the harness that drives a stock local MCP client through discovery, `/authorize`, `/token` and `list_tools` against a locally bound server, unregistered and registered, and, with the local entry's `refresh_tokens: true`, one refresh after the access token is made to expire. Test 18 | 17 | sonnet writes the harness, run with the operator |
 | 25 | **The invariant's wording** (decision 25): the "trusted ref" invariant re-founded, edited together in `CLAUDE.md` and `AGENTS.md`; a design-doc addendum beside `docs/plans/2026-09-11-willikins-design.md`'s "a checkout of a trusted ref"; and the written rule that only the operator writes the volume, in both files and in memory. The wording is the one decision 25 proposes, **approved by the operator on 2026-10-20** (settled decision 7), and it lands byte-identical in both files. No code | 20 | coordinator |
 | 19 | Go-live (decision 9): the echo measurement on a disposable environment, never the live service; allowed hosts; step 4a's accounts and both allowlists; the private documents and the client table on the volume; the signing key generated and injected through Doppler, then the `m2c` merge and push (the push fence), with `.railway/railway.ts` and `railway config plan` and the retired variables removed in the same change; the domain attached once that deploy is healthy; step 4b's enrollments; Doppler's other secrets; the backups; `WILLIKINS_FAKE_CATALOG` removed with its `preserve()` row; both apps connected and used from iOS; the stock-client run against the public domain; one real cycle. Mark this plan **Completed**. Test 19 | 18, 25, operator | coordinator with the operator |
 
@@ -3801,11 +4128,15 @@ says so in the decision rather than waiting on a fetch.
 5. **Tasks 4 and 11: every OAuth 2.1 section number.** draft-ietf-oauth-v2-1-16 is an
    Internet-Draft (rev 16, 2026-09-03, expires 2027-03-07) whose Status of This Memo forbids citing
    it other than as work in progress, and which already carries one unreconciled tension (refresh
-   tokens: non-normative §10 "must" versus normative §4.3 "SHOULD" — decision 21 resolves it by
-   issuing none). Which draft each MCP section number resolves to is verified stable only for §5.2.
+   tokens: non-normative §10 "must" versus normative §4.3 "SHOULD"). Decision 21 used to resolve it
+   by issuing none; decision 26 resolves it by rotation, which satisfies both readings, and RFC
+   9700 §4.14.2, a published RFC, says the same as a MUST. Decision 26's draft-16 quotes (§4.3,
+   §4.3.1, §4.3.3) are from the copy fetched on 2026-10-20. Which draft each MCP section number resolves to is verified stable only for §5.2.
 6. **Tasks 4 and 11: documents cited but not fetched**, each to be read before the code it governs
-   is written. RFC 9700 (the Security BCP behind the exact-match rule), RFC 7662 and RFC 7009 (only
-   if introspection or revocation is ever offered), draft-16 §4.3.1 and §7.5.1, RFC 9449 (DPoP),
+   is written. RFC 9700 (the Security BCP behind the exact-match rule; **§4.14 was fetched
+   2026-10-20** for decision 26, the exact-match section still is not), RFC 7662 (only if
+   introspection is ever offered), RFC 7009 (**fetched 2026-10-20**, §2 to §2.2.1, for decision
+   26), draft-16 §7.5.1 (§4.3.1 was fetched 2026-10-20), RFC 9449 (DPoP),
    RFC 8705 (mTLS), RFC 9126 (PAR), RFC 9207 (`iss`), RFC 8693 §4.2 and §4.3 (the `scope` and
    `client_id` claim definitions RFC 9068 §2.2 delegates to), OpenID Connect Discovery 1.0, and the
    IANA OAuth Dynamic Client Registration client-metadata registry.
@@ -3836,9 +4167,10 @@ says so in the decision rather than waiting on a fetch.
     least 64 bits, stored hashed) and §3.1.2.2 (look-up secrets shorter than 112 bits SHALL use a
     password hashing scheme); decision 24 **follows the reading that satisfies both** — codes of at
     least 128 bits hashed with Argon2id — and says so rather than claiming the documents settle it.
-11. **Tasks 8 and 11: the three lifetimes no specification sets.** The maximum access-token
+11. **Tasks 8, 11 and 26: the five lifetimes no specification sets.** The maximum access-token
     lifetime, which is also the minimum key-rotation overlap window; the session's absolute and
-    idle timeouts. OWASP's fetched 2-to-5-minute idle range for high-value applications is the only
+    idle timeouts; and the refresh family's idle timeout and absolute lifetime (decision 26, which
+    gives its reasons, and whose 90-day ceiling is this plan's own). OWASP's fetched 2-to-5-minute idle range for high-value applications is the only
     anchor any of them has, and the authorization code's default is this plan's own choice under
     draft-16's RECOMMENDED 600-second ceiling.
 12. **Tasks 3 and 19: where the signing key lives, and the Railway volume's mount path.** Both a
@@ -3948,8 +4280,9 @@ settled by test 19 with the operator.
     server never writes it". That would need a second mount, and a service has one volume, so it is
     probably not available.
 32. **Task 19: what each app does when its 3600 s access token expires.** It might re-run OAuth
-    inline, or flip the connector to "Reconnect" so the user has to go to settings. That decides
-    how heavy open question 1's hourly re-consent really is.
+    inline, or flip the connector to "Reconnect" so the user has to go to settings. Since decision
+    26 this matters only when a family ends (idle, absolute, reuse or revocation) and for a client
+    without `refresh_tokens: true`, which is what it now measures.
 33. **Decision 25: whether a Railway rollback leaves the volume as it is.** The fetched page says a
     rollback "restores a previous deployment's Docker image and its custom variables" and does not
     mention volumes. That it leaves documents and the journal untouched is an inference.
@@ -3973,13 +4306,34 @@ settled by test 19 with the operator.
     browser, and record where the code lands. If the code lands in the second account's connector,
     settled decision 9's fallback, the per-deployment secret, is triggered.
 
+**Added by the operator's 2026-10-20 answers.** Each is settled by test 19 with the operator.
+
+38. **Task 19: whether each app keeps and uses a refresh token it received without asking for
+    `offline_access`.** Anthropic says Claude "appends `offline_access` when your authorization
+    server metadata lists it in `scopes_supported`, to obtain a refresh token", and willikins lists
+    it nowhere (decision 26). Nothing fetched says what Claude or ChatGPT does with an unrequested
+    refresh token. If either drops it, decision 26's delta applies: `offline_access` in the RFC
+    8414 document only, never on the resource.
+39. **Task 19: whether either app retries a refresh with the same token after a timeout or a lost
+    response.** Decision 26's strict reuse detection answers that retry by revoking the family. If
+    an app does it in practice, the delta is a grace window of a few seconds for the immediately
+    previous token only.
+40. **Task 19: whether either app calls a `revocation_endpoint` when its connector is removed.**
+    Nothing fetched says so. If neither does, a removed connector's family lives until its idle
+    timeout, and the go-live note says to revoke it from the Connections section.
+41. **Task 19: how long ChatGPT waits on a refresh, and whether it refreshes proactively.**
+    Anthropic's numbers are quoted ("up to 30 seconds for refresh token requests", "proactively up
+    to five minutes before the stored expiry"); OpenAI's page says only that "Access and refresh
+    tokens can still expire or rotate normally".
+
 ## Risks
 
 **The one the operator already knows: this is the security-critical part of the system and
 willikins is writing it rather than buying it.** Stated in terms of what is exposed and to whom.
 
 *What becomes anonymously reachable on a public domain with no edge rate limit:* `/authorize`,
-`/token`, `/jwks.json`, both well-known documents, and the passkey ceremony endpoints. Before this
+`/token` (now with the refresh grant), `/revoke`, `/jwks.json`, both well-known documents, and the
+passkey ceremony endpoints. Before this
 revision the only anonymous surfaces were the protected-resource-metadata document and a 401.
 
 *What a bug in issuance buys an attacker* (recomputed 2026-10-20 from today's catalog): a token
@@ -4020,7 +4374,7 @@ protocol-shaped, a timing oracle and a reachable `unwrap()` on a cancelled reque
 useful calibration for where to point pass 3.
 
 *What would make it unacceptable:* shipping without adversarial pass 3, or without a negative
-fixture per code binding held **in the store**. The whole argument is the one fetched post-mortem:
+fixture per code binding and per refresh binding held **in the store**. The whole argument is the one fetched post-mortem:
 the binding that was lost was lost by a rewrite that kept the comment claiming it happened, and the
 professional audit running in the same window missed it.
 
@@ -4050,8 +4404,8 @@ Then, in descending order of how likely each is to surprise someone:
 - **First durable identity state, on a volume it now shares** (2026-10-20). The credential store is
   a backup-and-restore concern this project has never had, and the journal is append-only and is
   not a credential store. Railway allows one volume per service, no replicas with volumes, and
-  downtime on redeploy. **So one volume now holds identity state** (the credential store and the
-  client table), **audit state** (the journal) **and privileged content** (the documents), and
+  downtime on redeploy. **So one volume now holds identity state** (the credential store, with
+  the refresh families since decision 26, and the client table), **audit state** (the journal) **and privileged content** (the documents), and
   anyone who can write it can change all three. The answers are in decision 25: only the operator
   writes it, the server never writes `workflows/`, every plan pins its documents' shas, and a
   backup restore is never used for documents because it rewinds the other two.
@@ -4098,9 +4452,24 @@ Then, in descending order of how likely each is to surprise someone:
   credential change flushes every live session for that account (decision 4). Beyond it there is
   still no operator-side "kill this session" surface, so the fallbacks are waiting out the shorter
   of the two timeouts, redeploying, or removing the subject from `WILLIKINS_APPROVER_SUBJECTS`.
-- **A stolen access token is valid until it expires**, and there is no revocation endpoint. With no
-  refresh tokens, that window is exactly `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`, which is the whole
-  reason the lifetime is a decision rather than a default.
+- **A stolen access token is valid until it expires.** `/revoke` and the Connections section end
+  its family, so no new token follows it, but the token itself validates until its `exp`
+  (decision 26). That window is exactly `WILLIKINS_ACCESS_TOKEN_TTL_SECONDS`, which is the whole
+  reason the lifetime is a decision rather than a default, and why it stayed at 3600 s when
+  refresh tokens arrived.
+- **A stolen refresh token** (2026-10-20, decision 26). It is good until one of three things
+  happens. The legitimate client refreshes, and reuse detection then kills the family for both.
+  The family is revoked. Or a lifetime ends. A thief who keeps it fresh while the legitimate client
+  is idle is bounded only by the 30-day absolute lifetime, and that is why the lifetime exists.
+  The store holds only hashes, so a copy of the volume yields no usable token. **The stateful
+  path the plan used to avoid is now built**, and both fetched rauthy regressions lived on it.
+  The answers are the bindings in the store, a negative fixture per binding, and pass 3's rows.
+- **Refresh tokens raise the stake of consent phishing.** Before them, a phished consent through
+  a shared public client id yielded at most an hour; now it can yield a family of up to 30 days.
+  The consent screen says the client will stay connected (decision 20), and the operator can see
+  and revoke every family on the Connections section. Verify item 37 still decides whether the
+  code reaches an attacker at all, and settled decision 9's fallback is what closes it if it
+  does.
 - **Sessions, ceremonies, authorization codes and the cookie signing key are process memory, and
   the deployment is one replica.** `.railway/railway.ts` pins
   `replicas: { "europe-west4-drams3a": 1 }`, which is what makes an in-memory session store correct
@@ -4109,7 +4478,9 @@ Then, in descending order of how likely each is to surprise someone:
   configured signing key first, and that is a milestone 3 decision, not a dial to turn.
 - **Sessions, codes and nonces die on a redeploy.** Approving after a redeploy means logging in
   again, and an authorization code in flight is lost. The journal is durable and a pending plan is
-  unaffected; the README gains the line.
+  unaffected; the README gains the line. Refresh families are durable too, so an app stays
+  connected; a volume restore brings back revoked ones, which go-live step 9 answers with a
+  revoke-all.
 - **The audience is stable while it is published, and moving it costs a migration.** RFC 9728 §3.3
   makes the published `resource` byte-identical to the URL a client used. Mitigation, in two
   halves: the host is one the operator owns, so a move off Railway does not move the identifier at
@@ -4157,18 +4528,15 @@ Then, in descending order of how likely each is to surprise someone:
 - **Dynamic client registration: do not build it, ever.** MCP grades it MAY, explicitly deprecated
   and retained for backwards compatibility. It is an anonymous write endpoint, a persisted client
   registry, a garbage collector and a rate limit, and deferring it costs nothing.
-- **Refresh tokens and a revocation endpoint**, together, because they are the same trade. Issuing
-  no refresh token deletes the only stateful authorization-server requirement there is — rotation
-  with reuse detection and family revocation — and every one of rauthy's worst fetched problems
-  lived on that path. The cost is that the access-token lifetime is exactly how often a human
-  re-consents, and that an operator who believes a token leaked waits the lifetime out. Revisit
-  both at once or neither. **Banked at `todos/2026-09-16-unattended-agents-token-longevity.md`**,
-  which carries the pairing rule, the cost to an agent meant to run without a human, and the three
-  ways out: a longer per-client lifetime (the client table has room for the column, which decision
-23's schema would gain as a new key), refresh plus
-  revocation together, or capability tokens with offline attenuation (`biscuit-auth`, macaroons),
-  which suit willikins' shaped authority — a plan is a fixed set of operations against named
-  resources — and which are unverified beyond the crate's existence.
+- **Refresh tokens and revocation landed in 2c, together** (settled decision 5, decision 26),
+  which keeps `todos/2026-09-16-unattended-agents-token-longevity.md`'s pairing rule. What that
+  todo still holds: sender-constrained refresh tokens (DPoP or mTLS); an access-token `jti`
+  denylist, if 3600 s ever stops being short enough; a reuse grace window, only if verify item 39
+  finds a client that retries; a longer per-client lifetime, which the client table has room for
+  as a new key; and capability tokens with offline attenuation (`biscuit-auth`, macaroons), which
+  suit willikins' shaped authority — a plan is a fixed set of operations against named resources
+  — and are unverified beyond the crate's existence. A family is still bound to a human's
+  consent every 30 days, so an agent meant to run unattended for longer still needs one of those.
 - **Automated key-rotation scheduling.** The *mechanism* is in this milestone (decision 22); the
   cron is not. Rotation is an operator action until someone asks for it, and no RFC prescribes a
   schedule.
@@ -4253,11 +4621,13 @@ alternative is forgotten cannot be revisited honestly.
    still needs that key present. What version history *does* settle is the rollback: a rotation
    that installs a bad key is recoverable from the dashboard without willikins keeping a copy, so
    the retiring-key variable exists only for the overlap and may be cleared as soon as the window
-   closes. The interaction that makes the overlap worth its variable is decision 20's: **there are
-   no refresh tokens**, so an outstanding token that is refused does not refresh — it sends its
-   holder back to `/authorize`, which needs a human. Without the overlap, rotating the key demands
-   one human consent per client, immediately, which is the kind of cost that makes an operator
-   rotate less often.
+   closes. The interaction that made the overlap worth its variable was that **there were no
+   refresh tokens**, so an outstanding token that was refused could not refresh — it sent its
+   holder back to `/authorize`, which needs a human. *2026-10-20:* with refresh tokens (decision
+   26), a client whose entry allows them would refresh on that 401 instead, since refresh tokens
+   are unsigned and survive a key change. The overlap is kept anyway: a client without refresh
+   tokens still needs a human, and even a refreshing client would see a burst of 401s on every
+   rotation.
 
 3. **Client registration: pre-registration, one configuration entry per client.** *The reason:* for
    a handful of agent clients it costs zero new endpoints and zero attack surface, where a client
@@ -4270,8 +4640,11 @@ alternative is forgotten cannot be revisited honestly.
 4. **The access-token lifetime: 3600 seconds.** *The reason:* with no refresh tokens the lifetime
    is exactly how often a human must re-consent at `/authorize`, and an hour is the shortest span
    that does not interrupt a working session. It is also decision 22's key-rotation overlap window,
-   so the two numbers are one decision and move together. *2026-10-20:* this stands. What it costs
-   on the phone use case is recorded as open question 1, not changed.
+   so the two numbers are one decision and move together. *2026-10-20:* this stands, on a changed
+   footing. Settled decision 5 adds refresh tokens, so for a client that has them the hour is no
+   longer a re-consent interval. It is the window of a leaked access token, which `/revoke` cannot
+   shorten (decision 26), and that is a reason to keep it short rather than lengthen it, which is
+   what settled decision 5's answer, as relayed, asks: access tokens stay short.
 
 **Settled 2026-10-20.** Answers 6 and 7 below are in the operator's own words; the other five are
 as the coordinator relayed them (the 2026-10-20 addendum at the top says which is which).
