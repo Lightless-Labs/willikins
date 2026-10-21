@@ -49,6 +49,44 @@ its own text named: this host's Docker (`colima`, `vz` driver) cannot start a VM
 with no first-hop response. Settled instead by reading `distroless`'s own build definition at the
 last commit before it dropped `debian12` support — a stronger primary source than the README
 item 2 used to distrust. See item 2's own text for the citation.
+**Addendum:** 2026-10-21 (task 21) — four deviations from the row's exact wording, each kept
+within what decision 25 actually requires (no symlink ever followed, no path re-resolved between
+a check and an open):
+1. **`willikins-dsl` took no `rustix` dependency.** `load_document_from_file(File, &Path)` reads
+   from a `std::fs::File` the caller already opened; nothing in that crate needed to open anything
+   itself. Added to `willikins-server` only.
+2. **`openat`'s flags gained `O_NONBLOCK`**, not in the row's own list. Without it a `.yaml`-named
+   FIFO placed in the directory would block the open — and so the whole scan or lookup — forever;
+   `O_NOFOLLOW` alone does not cover this, since a FIFO is not a symlink. Harmless on a regular
+   file, which ignores the flag.
+3. **Each `Butler` operation's root load and its own `TrustedResolver` open separate directory
+   handles, not one shared descriptor.** `TrustedResolver::new` opens its own handle once, eagerly,
+   the moment it is constructed — so a workflow with no `uses:` step (which never calls `resolve`)
+   still builds successfully even if the directory is unreadable, and one that does have a `uses:`
+   step sees any failure the first time it actually needs the directory, reported as
+   `ResolveFailure::NotFound` (the same outcome a missing child gives). This keeps `load_named_document`
+   and `TrustedResolver::new` at their pre-2c signatures (`dir: &Path`), so no `Butler` call site
+   needed to change at all. The cost against the row's literal "same handle" wording is one extra
+   `open` syscall per lookup that also links a `uses:` tree — `scan_directory` is the one place that
+   does share a single handle across its whole listing and every top-level candidate's own open,
+   which is the path every acceptance test and the real deployment's own startup actually walks.
+4. **The `RAILWAY_VOLUME_MOUNT_PATH` warning lives in `cli.rs`'s `build_butler`, not inside
+   `Butler::start`.** `ButlerConfig` carries no environment-specific fields and is constructed
+   directly by roughly a dozen existing tests across two crates; adding a field there to carry this
+   one Railway-specific, informational-only comparison would have touched all of them for a warning
+   `Butler`'s own library core has no other reason to know about. `ServerConfig` (already the one
+   place that reads `std::env` via a pure, testable lookup) gained `volume_mount_path` instead, and
+   `warn_if_workflows_dir_outside_volume_mount` is a pure comparison function pinned directly in
+   `cli.rs`'s own test module.
+
+Also discovered in the process, not a deviation from the row but from an *existing* test:
+`adversarial_13.rs`'s `a_symlinked_workflows_directory_is_followed_and_recorded_as_operator_level`
+pinned the pre-2c trust model decision 25 explicitly reverses ("the directory itself... is
+followed"). Replaced by `a_symlinked_workflows_directory_refuses_to_start`, which drives the real
+binary and asserts exit code 2, naming the symlinked directory — the behaviour this task's own
+acceptance criteria require. `StartupError::Symlink`'s `Display` text changed from "a symlinked
+document is refused" to "a symlink is refused, not followed" since the variant is now reused for
+the directory itself, not only an entry; no test asserted the old exact text.
 
 The defaults the two review passes chose, which the operator may still overrule (the coordinator
 took them as written, 2026-10-20): the in-house subject is an account name the operator picks; a
