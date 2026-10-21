@@ -72,6 +72,13 @@ fn config() -> HttpConfig {
 }
 
 fn initialize_request(host: &str) -> Request<Body> {
+    initialize_request_with_origin(host, None)
+}
+
+/// As [`initialize_request`], with an optional `Origin` header -- task
+/// 1b's `enforce_origin_validation()` pin needs to set one; nothing
+/// else here does.
+fn initialize_request_with_origin(host: &str, origin: Option<&str>) -> Request<Body> {
     let body = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -82,13 +89,17 @@ fn initialize_request(host: &str) -> Request<Body> {
             "clientInfo": { "name": "deploy-host-header-test", "version": "0.1.0" },
         },
     });
-    Request::builder()
+    let mut builder = Request::builder()
         .method("POST")
         .uri("/mcp")
         .header("host", host)
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream")
-        .header("authorization", format!("Bearer {AGENT_TOKEN}"))
+        .header("authorization", format!("Bearer {AGENT_TOKEN}"));
+    if let Some(origin) = origin {
+        builder = builder.header("origin", origin);
+    }
+    builder
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap()
 }
@@ -175,4 +186,42 @@ async fn mcp_refuses_a_host_header_that_only_starts_with_the_allowed_domain() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// Task 1b (decision 18): rmcp 3.4.0's `enforce_origin_validation()`
+/// makes an empty `allowed_origins` list enforce rather than exempt, so
+/// an authenticated `/mcp` request carrying a present `Origin` is
+/// refused even though task 5 has not yet given the list an entry. Auth
+/// and the `Host` check both pass first, isolating the origin check.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_refuses_an_authenticated_request_carrying_a_present_origin() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = willikins_server::router(butler(dir.path()), &config());
+
+    let response = router
+        .oneshot(initialize_request_with_origin(
+            &format!("{PRIVATE_DOMAIN}:8080"),
+            Some("https://evil.example"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// The other half of the same pin: a request with no `Origin` header at
+/// all still passes, exactly as every other test in this file (which
+/// sends none) already depends on.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_accepts_an_authenticated_request_with_no_origin_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = willikins_server::router(butler(dir.path()), &config());
+
+    let response = router
+        .oneshot(initialize_request_with_origin(
+            &format!("{PRIVATE_DOMAIN}:8080"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }

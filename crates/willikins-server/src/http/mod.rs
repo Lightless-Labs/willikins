@@ -61,7 +61,15 @@ fn build_mcp_service(
         .with_legacy_session_mode(false)
         .with_json_response(true)
         .with_max_request_body_bytes(config.max_body_bytes)
-        .with_allowed_hosts(config.allowed_hosts.clone());
+        .with_allowed_hosts(config.allowed_hosts.clone())
+        // rmcp 3.4.0 (decision 18): refuse an `Origin` the server does not
+        // allow. Until task 5 sets a non-empty `allowed_origins` (the
+        // derived public origin), the list is empty, so every request to
+        // `/mcp` that carries an `Origin` header is answered 403; one with
+        // no `Origin` (a server-to-server client, and every test here
+        // before this change) is unaffected. The deployment has no public
+        // domain until 2c's go-live, so nothing it serves sends one.
+        .enforce_origin_validation();
     StreamableHttpService::new(
         move || Ok(handler.clone()),
         session_manager,
