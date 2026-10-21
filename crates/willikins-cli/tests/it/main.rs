@@ -23,6 +23,7 @@ mod cli;
 mod composition;
 mod composition_equivalence;
 mod delete_call_sites_guard;
+mod documents_check;
 mod identifier_masking;
 mod inherited_secret_gate_document;
 mod new_repository_scaffold_document;

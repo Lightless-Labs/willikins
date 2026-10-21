@@ -115,6 +115,10 @@ enum Command {
     /// `rollback --plan-id <id> --journal <path> [...]` applies one
     /// already approved (`willikins approve`).
     Rollback(commands::RollbackArgs),
+    /// Check a trusted workflow directory before publishing it:
+    /// `willikins documents check <dir>` (milestone 2c, decision 25).
+    #[command(subcommand)]
+    Documents(DocumentsCommand),
     /// Run the MCP server: `willikins serve --stdio | --http --bind <addr>
     /// [--fake] [--principal <id>]`. The same implementation
     /// `willikins-server serve` calls -- see
@@ -127,6 +131,24 @@ enum Command {
     /// output or a shell history. The same implementation
     /// `willikins-server hash-token` calls.
     HashToken,
+}
+
+/// `willikins documents <subcommand>` (milestone 2c, decision 25). One
+/// variant today; `--clients <file>` (task 11) is a second flag on
+/// `Check`, not a new variant, when it lands.
+#[derive(Subcommand)]
+enum DocumentsCommand {
+    /// Scan `dir` non-recursively exactly as a deployment's `Butler::start`
+    /// would, against the live tool set, and print one
+    /// `<sha256>  <file name>` line per document in `shasum -a 256`
+    /// format -- the same data a start on this directory would journal as
+    /// `ServerStarted.workflow_hashes`. Reads only `dir`; writes nothing,
+    /// to the directory or anywhere else. Needs no provider credential:
+    /// `check` never calls one.
+    Check {
+        /// The trusted workflow directory to check -- never written to.
+        dir: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -160,6 +182,9 @@ fn main() -> ExitCode {
         Command::Runs(args) => commands::cmd_runs(&args, cli.json, disclosure),
         Command::Run(args) => commands::cmd_run(&args, cli.json, disclosure),
         Command::Rollback(args) => commands::cmd_rollback(&args, cli.json, disclosure),
+        Command::Documents(DocumentsCommand::Check { dir }) => {
+            cmd_documents_check(&dir, cli.json, disclosure)
+        }
         Command::Serve(args) => willikins_server::cli::run_serve(&args),
         Command::HashToken => willikins_server::cli::run_hash_token(),
     }
@@ -505,6 +530,66 @@ fn cmd_plan(
                 println!("{}", render::plan_error_text(&err));
             }
             ExitCode::from(1)
+        }
+    }
+}
+
+/// `willikins documents check <dir>` (milestone 2c, decision 25, task
+/// 22). Runs [`willikins_server::documents_manifest`] -- exactly the scan
+/// a `Butler::start` on `dir` would run -- against the live tool set,
+/// built without reading a single provider credential
+/// ([`willikins_server::live_catalog_without_credentials`]: `check` never
+/// calls a provider, so no credential is needed to check a document that
+/// uses one). Reads only `dir`; writes nothing anywhere, to the
+/// directory or otherwise -- there is no `Butler` here to journal
+/// through.
+///
+/// Prints one `<sha256>  <file name>` line per document, in
+/// `shasum -a 256` format (two spaces, lower-case hex, filename order --
+/// the scan's own deterministic order), equal to what a `Butler::start`
+/// on the same `dir` would journal as `ServerStarted.workflow_hashes`.
+/// As JSON, prints the same filename-to-hash mapping as one object.
+///
+/// Exits 2 on a [`willikins_server::StartupError`] in the "could not even
+/// be read as a document" class (`Directory`, `Symlink`, `InvalidName`,
+/// `NameMismatch`, `Document`, `Journal` -- the last unreachable here,
+/// since this function never journals), matching this binary's own
+/// `DocumentError`-is-exit-2 convention (module docs); exits 1 on
+/// `Compose` or `Check`, the "parsed, but fails validation" class,
+/// matching `CheckError`'s own exit code. Exits 0 and prints the manifest
+/// otherwise, even for an empty directory (`[]`/no lines): an operator
+/// checking a freshly-emptied staging directory should see "nothing here"
+/// rather than a refusal.
+fn cmd_documents_check(dir: &str, json: bool, disclosure: Disclosure) -> ExitCode {
+    let catalog = willikins_server::live_catalog_without_credentials();
+    match willikins_server::documents_manifest(Path::new(dir), &catalog) {
+        Ok(manifest) => {
+            if json {
+                render::print_json(&manifest, disclosure);
+            } else {
+                for (filename, sha) in &manifest {
+                    println!("{sha}  {filename}");
+                }
+            }
+            ExitCode::from(0)
+        }
+        Err(err) => {
+            if json {
+                render::eprint_json(&Reported::new(&err), disclosure);
+            } else {
+                eprintln!("{err}");
+            }
+            let exit = match err {
+                willikins_server::StartupError::Compose { .. }
+                | willikins_server::StartupError::Check { .. } => 1,
+                willikins_server::StartupError::Directory { .. }
+                | willikins_server::StartupError::Symlink { .. }
+                | willikins_server::StartupError::InvalidName { .. }
+                | willikins_server::StartupError::NameMismatch { .. }
+                | willikins_server::StartupError::Document { .. }
+                | willikins_server::StartupError::Journal { .. } => 2,
+            };
+            ExitCode::from(exit)
         }
     }
 }
