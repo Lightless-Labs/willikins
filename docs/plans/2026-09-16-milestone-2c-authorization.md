@@ -78,6 +78,21 @@ a check and an open):
    place that reads `std::env` via a pure, testable lookup) gained `volume_mount_path` instead, and
    `warn_if_workflows_dir_outside_volume_mount` is a pure comparison function pinned directly in
    `cli.rs`'s own test module.
+5. **`document.rs` is now unix-only** (`std::os::unix::ffi::OsStrExt`, and `rustix`'s `O_DIRECTORY`/
+   `O_NOFOLLOW`/`O_NONBLOCK` flags, which this workspace only ever builds and tests on macOS and
+   Linux). The pre-2c version was plain `std::fs`, portable in principle though nothing in this
+   workspace exercised that portability. A platform narrowing, taken deliberately rather than
+   discovered later.
+
+**A scope note for `workflows_dir_write_guard.rs`'s own test**, not a deviation but a limit worth
+stating against the row's "no file ... calls a write API" wording: the guard's pattern list is
+`std::fs`'s write APIs, the shape the row itself names, and it scans files that name the identifier
+`workflows_dir` — which is `butler.rs`, `config.rs`, `cli.rs` and `approvals.rs` today, never
+`document.rs` or `startup.rs` (both parameter the directory as `dir`, the pre-2c name, kept
+unchanged by this task). Neither gap matters today: `document.rs`/`startup.rs` call no write API,
+`rustix`-based or otherwise, over the trusted directory — but a future write added to either file
+would trip no guard at all, by either the API-shape or the identifier-naming half of the check. A
+todo for whoever widens this guard, not a defect in what task 21 asked for.
 
 Also discovered in the process, not a deviation from the row but from an *existing* test:
 `adversarial_13.rs`'s `a_symlinked_workflows_directory_is_followed_and_recorded_as_operator_level`
@@ -87,6 +102,12 @@ binary and asserts exit code 2, naming the symlinked directory — the behaviour
 acceptance criteria require. `StartupError::Symlink`'s `Display` text changed from "a symlinked
 document is refused" to "a symlink is refused, not followed" since the variant is now reused for
 the directory itself, not only an entry; no test asserted the old exact text.
+
+**Hand-off to task 23:** `Butler::start`'s per-document log line slices `DocumentSha256::to_string()`
+to 12 characters inline (matching `http::config`'s own existing `TokenHash` convention, found only
+after writing this), rather than through a method on `DocumentSha256` itself. Task 23's own "short
+sha" on the approvals page should add `DocumentSha256::short()` (or similar) and have both callers
+use it, rather than a second ad hoc slice.
 
 The defaults the two review passes chose, which the operator may still overrule (the coordinator
 took them as written, 2026-10-20): the in-house subject is an account name the operator picks; a
