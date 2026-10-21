@@ -206,6 +206,48 @@ The journal is one JSONL file. Set `WILLIKINS_JOURNAL_PATH=/data/journal.jsonl`.
 stores this file on one persistent volume, mounted at `/data`. A Railway service with a
 volume runs at most one replica; Railway does not allow more.
 
+### Checking and publishing workflow documents
+
+The trusted workflow directory (`WILLIKINS_WORKFLOWS_DIR`) also lives on that volume, so an
+operator can change the document set without rebuilding or redeploying the image. **An agent
+never writes the volume.** No agent runs `railway volume files upload`, `rename`, or
+`browse`, `railway ssh`, `scp`, or `sftp` against the service. Only the operator publishes a
+document set, by hand, from their own machine.
+
+Before publishing anything, check the set with the directory it will become, not the one
+already live:
+
+```
+willikins documents check <dir>
+```
+
+This runs the exact same scan a deployment's startup runs -- the same non-recursive scan,
+the same symlink refusal, the same `check` against the live tool set -- and prints one
+`<sha256>  <file name>` line per document, in `shasum -a 256` format. It needs no provider
+credential: `check` never calls one, live or fake. It writes nothing, to `<dir>` or anywhere
+else. A directory holding a document that fails to parse, fails to link, or fails `check`
+exits non-zero, naming the file, with the same error a deployment's startup would have
+produced.
+
+The manifest this prints is exactly what a `Butler::start` on the same directory journals as
+`ServerStarted`'s own `workflow_hashes`. To publish a checked set:
+
+1. Run `willikins documents check <dir>` over the reviewed checkout, and keep the manifest.
+2. Upload only the top-level documents into a clean staging path on the volume (for example
+   `railway volume files upload <staging-dir> /workflows.next`).
+3. Download the staged path back and compare its `shasum -a 256` output against the kept
+   manifest.
+4. Rename the live workflows path out of the way and the staged path into its place (or, if
+   renaming is not available, upload file by file with `--overwrite` and remove anything that
+   was deleted).
+5. Restart the service, then confirm the startup log's file names and short shas match the
+   manifest.
+6. Re-plan anything that now refuses with `DocumentChanged`.
+
+A volume-backup restore is never the way to recover a broken document set: it also rewinds
+the journal and the credential store to the backup point. Recover documents by re-publishing
+the reviewed checkout instead.
+
 ### Recovery after a crash
 
 A crash during a write can truncate the journal's last line. `willikins-server` checks
