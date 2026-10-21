@@ -4726,6 +4726,14 @@ says so in the decision rather than waiting on a fetch.
 3. **Task 1b: whether `cargo update -p rmcp --precise 3.4.0` resolves and the four gates pass.**
    The `ServerInfo` rename at three sites is the only breakage identifiable statically; 3.4.0's
    cancellation and pre-init changes were not verified against willikins' stateless configuration.
+   **Settled 2026-10-21.** It resolves (rmcp-macros rides to 3.6.0). The rename at mcp.rs's three
+   sites was the only breakage. The server's MCP and HTTP battery (`mcp_server`,
+   `mcp_output_schema_conformance`, `deploy_host_headers`, `http_server`, `http_smoke`,
+   `adversarial_13`, `blocking_pool_13`) passes 74 of 74 with the tool-list snapshot unchanged, the
+   CLI's `acceptance_11_mcp_parity` passes 11 of 11, and clippy and fmt are clean. The
+   cancellation and pre-init changes showed no difference in those tests.
+   `enforce_origin_validation()` is on from this task: with `allowed_origins` empty until task 5,
+   any `/mcp` request carrying an `Origin` header gets 403, and one without is unaffected.
 4. **Task 3: whether the PKCS#8 a Rust key factory emits round-trips through `jsonwebtoken`.**
    **The first half is exercised in-tree** (2026-10-20). `crates/willikins-types/src/appstore.rs`
    re-encodes a P-256 key to PKCS#8 PEM with `p256`'s `EncodePrivateKey`, and
