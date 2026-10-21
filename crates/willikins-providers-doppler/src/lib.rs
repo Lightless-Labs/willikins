@@ -60,7 +60,7 @@ pub use client::{
     CREDENTIAL_PATTERN, CREDENTIAL_VAR, DOPPLER_API_BASE_URL, DopplerClient,
     DopplerCredentialError, DopplerSlug, DopplerSlugError, LIST_MAX_PAGES, LIST_PER_PAGE,
     MANAGED_DESCRIPTION, ProjectMemberEntry, ServiceAccountEntry, credential_from_env, http_client,
-    looks_like_a_missing_project,
+    http_client_without_credential, looks_like_a_missing_project,
 };
 pub use tools::{
     DopplerBranchConfigEnsure, DopplerConfigEnsure, DopplerConfigInheritableEnsure,

@@ -313,6 +313,57 @@ pub fn scan_directory(dir: &Path, catalog: &Catalog) -> Result<Vec<Loaded>, Star
     Ok(loaded)
 }
 
+/// Every loaded document's filename mapped to its content hash, in the
+/// exact shape [`crate::Butler::start`] journals as
+/// [`willikins_journal::Event::ServerStarted`]'s own `workflow_hashes` --
+/// one function, so the two can never disagree about what a document's
+/// filename or hash is (the module docs' own "one function, two callers"
+/// idiom, now extended to a third: [`documents_manifest`]).
+pub(crate) fn workflow_hashes(loaded: &[Loaded]) -> std::collections::BTreeMap<String, String> {
+    loaded
+        .iter()
+        .map(|entry| {
+            let filename = entry
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            (filename, entry.document_sha256.to_string())
+        })
+        .collect()
+}
+
+/// Milestone 2c, decision 25: `willikins documents check <dir>`'s whole
+/// implementation (task 22). Runs exactly [`scan_directory`] -- the same
+/// scan [`crate::Butler::start`] runs, against the same `catalog` -- and
+/// returns each document's filename mapped to its content hash, equal to
+/// what a `Butler::start` on this same `dir` and `catalog` would journal
+/// as `ServerStarted.workflow_hashes`. **Journals nothing and writes
+/// nothing**: unlike `Butler::start`, there is no `Butler` here to
+/// journal through, and this function touches no store at all -- an
+/// operator can run it as many times as they like, against a directory
+/// they are not yet ready to publish, with no side effect.
+///
+/// `check` never calls a provider, so a caller that built `catalog`
+/// without reading any credential (`crate::live_catalog_without_credentials`)
+/// gets exactly the same result as one built from real credentials: the
+/// manifest depends only on the document bytes and the catalog's tool
+/// *shapes*, never on whether a tool could actually run.
+///
+/// # Errors
+///
+/// See [`StartupError`]: the first document that fails to parse, link,
+/// or `check` refuses the whole call, naming the file, exactly as it
+/// would refuse a start.
+pub fn documents_manifest(
+    dir: &Path,
+    catalog: &Catalog,
+) -> Result<std::collections::BTreeMap<String, String>, StartupError> {
+    let loaded = scan_directory(dir, catalog)?;
+    Ok(workflow_hashes(&loaded))
+}
+
 /// One declared input, summarised for [`WorkflowSummary::inputs`].
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct InputSummary {

@@ -25,7 +25,7 @@ mod types;
 pub use butler::{Butler, ButlerConfig, SharedJournal};
 pub use catalog::{
     DocumentCredentialError, LIVE_TOOL_NAMES, LiveCredentialError, live_catalog_for_document,
-    live_catalog_from_env, live_catalog_with,
+    live_catalog_from_env, live_catalog_with, live_catalog_without_credentials,
 };
 pub use config::{ConfigError, ServerConfig};
 pub use drift::DriftDetail;
@@ -40,7 +40,7 @@ pub use mcp::{
     serve_stdio, serve_stdio_handler,
 };
 pub use read_ops::{DocumentSource, ProposeSlugResponse, ValidateResponse};
-pub use startup::{InputSummary, StartupError, WorkflowSummary};
+pub use startup::{InputSummary, StartupError, WorkflowSummary, documents_manifest};
 pub use types::{
     ApprovalRequirement, PlanResponse, RunHandle, TeardownPlanResponse, TeardownRunResult,
 };

@@ -22,6 +22,6 @@ pub mod tools;
 pub use client::{
     CREDENTIAL_HEADER, CREDENTIAL_PATTERN, CREDENTIAL_VAR, CreatedIngestionKey, HOST_VAR,
     IngestionKeyListEntry, SigNozClient, SigNozCredentialError, SigNozHostError, base_url_from_env,
-    credential_from_env, http_client, looks_like_a_duplicate_name,
+    credential_from_env, http_client, http_client_without_credential, looks_like_a_duplicate_name,
 };
 pub use tools::SigNozIngestionKeyEnsure;

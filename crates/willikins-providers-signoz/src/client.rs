@@ -147,6 +147,19 @@ pub fn http_client(base_url: impl Into<String>, credential: Credential) -> Http 
     Http::with_credential_header(base_url, Vec::new(), credential, Some(CREDENTIAL_HEADER))
 }
 
+/// Build an [`Http`] with no [`Credential`] at all, and no real tenant
+/// host either: every request this crate's tool sends through it refuses
+/// locally, naming [`CREDENTIAL_VAR`], before anything is dialed, so
+/// `base_url` is never actually reached and need not resolve. Mirrors
+/// `willikins_providers_doppler::http_client_without_credential`'s own
+/// doc; see it for the one caller today,
+/// `willikins_server::catalog::live_catalog_without_credentials`
+/// (milestone 2c, task 22, `willikins documents check`).
+#[must_use]
+pub fn http_client_without_credential() -> Http {
+    Http::without_credential("https://signoz.invalid", Vec::new(), CREDENTIAL_VAR)
+}
+
 /// A typed `SigNoz` REST client, bound to one [`Http`] (which itself owns
 /// the [`Credential`] and the tenant host).
 pub struct SigNozClient {

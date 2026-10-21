@@ -186,6 +186,22 @@ pub fn http_client(credential: Credential) -> Http {
     Http::new(DOPPLER_API_BASE_URL, Vec::new(), credential)
 }
 
+/// Build an [`Http`] against Doppler's real API, but no [`Credential`] at
+/// all: every request this crate's tools send through it refuses locally,
+/// naming [`CREDENTIAL_VAR`]. Mirrors
+/// `willikins_providers_github::http_client_without_credential` and
+/// `willikins_providers_buildkite::http_client_without_credential`
+/// exactly; see their own docs. Milestone 2c, task 22: the one caller
+/// today is `willikins_server::catalog::live_catalog_without_credentials`,
+/// which builds the whole live tool set for `willikins documents check`
+/// (decision 25) -- a catalog `check` validates a document against, and
+/// `check` never calls a provider, so no tool in that catalog is ever
+/// actually invoked.
+#[must_use]
+pub fn http_client_without_credential() -> Http {
+    Http::without_credential(DOPPLER_API_BASE_URL, Vec::new(), CREDENTIAL_VAR)
+}
+
 /// A typed Doppler REST client, bound to one [`Http`] (which itself owns
 /// the [`Credential`]).
 pub struct DopplerClient {

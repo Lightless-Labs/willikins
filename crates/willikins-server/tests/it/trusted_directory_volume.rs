@@ -23,7 +23,7 @@ use crate::common;
 use std::sync::{Arc, Mutex};
 
 use willikins_journal::{Clock, Event, MemoryJournal};
-use willikins_server::{Butler, ButlerConfig, ButlerError, StartupError};
+use willikins_server::{Butler, ButlerConfig, ButlerError, StartupError, documents_manifest};
 use willikins_types::{DomainType, WorkflowName};
 
 fn wf(name: &str) -> WorkflowName {
@@ -210,6 +210,49 @@ fn server_started_hashes_exactly_the_bytes_on_disk() {
         .expect("ServerStarted must be journaled");
     let expected = sha256_hex(CHILDLESS_DOC.as_bytes());
     assert_eq!(hashes.get("foo.yaml"), Some(&expected));
+}
+
+// -------------------------------------------------------------
+// Milestone 2c, task 22: `documents_manifest` (`willikins documents
+// check`'s whole implementation) must agree with what a `Butler::start`
+// on the very same directory journals.
+// -------------------------------------------------------------
+
+#[test]
+fn documents_manifest_equals_what_start_journals_as_workflow_hashes() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "foo.yaml", CHILDLESS_DOC);
+    write(
+        dir.path(),
+        "bar.yaml",
+        "name: bar\ndescription: another workflow\nsteps: {}\n",
+    );
+    let clock = common::manual_clock();
+    let cfg = config(dir.path(), clock);
+    let journal = std::sync::Arc::clone(&cfg.journal);
+    Butler::start(cfg).expect("starts cleanly");
+
+    let entries = journal.lock().unwrap();
+    let journaled = entries
+        .entries()
+        .iter()
+        .find_map(|entry| match &entry.event {
+            Event::ServerStarted {
+                workflow_hashes, ..
+            } => Some(workflow_hashes.clone()),
+            _ => None,
+        })
+        .expect("ServerStarted must be journaled");
+    drop(entries);
+
+    // A fresh catalog -- `cfg.catalog` above was moved into `Butler::start`
+    // -- but `documents_manifest` depends only on the document bytes and
+    // the catalog's tool *shapes*, so a second, independently-built fake
+    // catalog checks identically.
+    let (_state, catalog) = willikins_providers_fake::empty();
+    let manifest =
+        documents_manifest(dir.path(), &catalog).expect("the same directory checks cleanly");
+    assert_eq!(manifest, journaled);
 }
 
 // -------------------------------------------------------------

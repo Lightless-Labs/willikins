@@ -196,7 +196,6 @@ impl Butler {
             );
         }
 
-        let mut workflow_hashes = std::collections::BTreeMap::new();
         for entry in &loaded {
             let filename = entry
                 .path
@@ -216,8 +215,12 @@ impl Butler {
                 sha = %short_sha,
                 "validated trusted workflow document"
             );
-            workflow_hashes.insert(filename, sha);
         }
+        // Milestone 2c, task 22: the same map-building logic
+        // `startup::documents_manifest` exposes to the CLI, so a start
+        // and `willikins documents check` can never disagree about what
+        // a document's filename or hash is.
+        let workflow_hashes = startup::workflow_hashes(&loaded);
 
         butler
             .append(Event::ServerStarted {

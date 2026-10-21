@@ -398,6 +398,31 @@ pub fn live_catalog(
     )
 }
 
+/// The live catalog -- every live tool [`LIVE_TOOL_NAMES`] names, exactly
+/// as [`live_catalog_from_env`] assembles it -- built without reading a
+/// single credential from the process environment.
+///
+/// Milestone 2c, task 22 (decision 25): `willikins documents check <dir>`
+/// must run against the same tool set a deployment without
+/// `WILLIKINS_FAKE_CATALOG` starts with, so a document using a live-only
+/// tool checks exactly as it would there -- but the operator checking a
+/// document set before publishing it has no reason to hold every
+/// provider credential, and `willikins_core::check` never calls a
+/// provider at all. Each of the four live providers' `Http` is built with
+/// [`willikins_providers_http::Http::without_credential`] (through each
+/// provider crate's own `http_client_without_credential`): a client that
+/// refuses locally, naming its missing variable, the moment anything
+/// tries to send a request through it -- which `check` never does.
+#[must_use]
+pub fn live_catalog_without_credentials() -> Catalog {
+    live_catalog_with(
+        willikins_providers_github::http_client_without_credential(),
+        willikins_providers_doppler::http_client_without_credential(),
+        willikins_providers_buildkite::http_client_without_credential(),
+        willikins_providers_signoz::http_client_without_credential(),
+    )
+}
+
 /// Why [`live_catalog_from_env`] could not build the live catalog: one of
 /// the two provisioning credentials (`WILLIKINS_GITHUB_TOKEN`,
 /// `WILLIKINS_DOPPLER_TOKEN`) was missing or did not look like a valid
@@ -954,6 +979,25 @@ mod tests {
                 .insert(fake.clone())
                 .expect_err(&format!("`{name}` is already in the live catalog"));
         }
+    }
+
+    /// Milestone 2c, task 22: `live_catalog_without_credentials` builds
+    /// with no environment variable set at all (`env_clear`'s whole
+    /// point in the CLI test; here, simply never reading one), and still
+    /// holds exactly [`LIVE_TOOL_NAMES`] -- the same tool set
+    /// [`live_catalog_from_env`] would build from real credentials, so
+    /// `willikins documents check` checks a document against exactly
+    /// what a deployment would.
+    #[test]
+    fn live_catalog_without_credentials_holds_exactly_the_live_tool_set() {
+        let catalog = live_catalog_without_credentials();
+        for name in LIVE_TOOL_NAMES {
+            let tool_name = willikins_core::ToolName::parse(name).unwrap();
+            catalog
+                .get(&tool_name)
+                .unwrap_or_else(|| panic!("the credential-free live catalog holds `{name}`"));
+        }
+        assert_eq!(catalog.specs().count(), LIVE_TOOL_NAMES.len());
     }
 
     /// Milestone 3i, task B7, decision (b8)'s first guard: no tool in
