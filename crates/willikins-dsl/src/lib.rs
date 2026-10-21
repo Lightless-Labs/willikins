@@ -334,18 +334,6 @@ pub fn load_document(path: &Path) -> Result<Workflow, DocumentError> {
 ///
 /// As [`load_document`].
 pub fn load_document_with_bytes(path: &Path) -> Result<(Workflow, Vec<u8>), DocumentError> {
-    use std::io::Read;
-
-    let read_error = |err: &dyn fmt::Display| {
-        DocumentError::semantic(
-            path.display().to_string(),
-            format!("failed to read document: {err}"),
-        )
-    };
-    let too_large = |bytes: usize| DocumentError {
-        kind: DocumentErrorKind::TooLarge { bytes },
-    };
-
     // For a regular file this is the exact size, which is what
     // `TooLarge` promises to report; for anything it under-reports, the
     // bounded read below is the backstop.
@@ -357,16 +345,76 @@ pub fn load_document_with_bytes(path: &Path) -> Result<(Workflow, Vec<u8>), Docu
         ));
     }
 
-    let file = std::fs::File::open(path).map_err(|err| read_error(&err))?;
+    let file = std::fs::File::open(path).map_err(|err| read_error(path, &err))?;
+    read_capped_and_parse(file, path)
+}
+
+/// As [`load_document_with_bytes`], but reads from `file`, a descriptor
+/// the caller already opened, rather than opening `path` itself -- `path`
+/// is used only to attribute an error message; it is never (re-)opened or
+/// (re-)`stat`ed by path. For a caller that resolved and opened `file`
+/// through a symlink-refusing, directory-handle-relative `openat`
+/// (milestone 2c, decision 25: `willikins-server`'s trusted-directory
+/// hardening), this is what lets the document bytes it hashes be
+/// *exactly* the bytes this parsed -- a second, path-based open here
+/// could resolve to something else underneath the same name.
+///
+/// The size cap and the bounded read are [`load_document_with_bytes`]'s
+/// own, sized from `file`'s own metadata (`File::metadata`, an `fstat` of
+/// the open descriptor) rather than a `std::fs::metadata` call on `path`.
+///
+/// # Errors
+///
+/// As [`load_document`].
+pub fn load_document_from_file(
+    file: std::fs::File,
+    path: &Path,
+) -> Result<(Workflow, Vec<u8>), DocumentError> {
+    if let Ok(metadata) = file.metadata()
+        && metadata.len() > MAX_DOCUMENT_BYTES as u64
+    {
+        return Err(too_large(
+            usize::try_from(metadata.len()).unwrap_or(usize::MAX),
+        ));
+    }
+    read_capped_and_parse(file, path)
+}
+
+fn too_large(bytes: usize) -> DocumentError {
+    DocumentError {
+        kind: DocumentErrorKind::TooLarge { bytes },
+    }
+}
+
+fn read_error(path: &Path, err: &dyn fmt::Display) -> DocumentError {
+    DocumentError::semantic(
+        path.display().to_string(),
+        format!("failed to read document: {err}"),
+    )
+}
+
+/// Shared by [`load_document_with_bytes`] and [`load_document_from_file`]
+/// once each has settled how it judged the file's size: read at most one
+/// byte past [`MAX_DOCUMENT_BYTES`] from the already-open `file`, refuse
+/// [`DocumentErrorKind::TooLarge`] if that bound was hit (the backstop
+/// for anything the earlier size check under-reported -- a FIFO, a
+/// character device, a file that grew in between), then parse.
+fn read_capped_and_parse(
+    mut file: std::fs::File,
+    path: &Path,
+) -> Result<(Workflow, Vec<u8>), DocumentError> {
+    use std::io::Read;
+
     let mut bytes = Vec::new();
-    file.take(MAX_DOCUMENT_BYTES as u64 + 1)
+    (&mut file)
+        .take(MAX_DOCUMENT_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
-        .map_err(|err| read_error(&err))?;
+        .map_err(|err| read_error(path, &err))?;
     if bytes.len() > MAX_DOCUMENT_BYTES {
         return Err(too_large(bytes.len()));
     }
 
-    let source = std::str::from_utf8(&bytes).map_err(|err| read_error(&err))?;
+    let source = std::str::from_utf8(&bytes).map_err(|err| read_error(path, &err))?;
     let workflow = parse_document(source)?;
     Ok((workflow, bytes))
 }
@@ -1743,6 +1791,33 @@ steps: {{}}
             serde_json::to_value(&workflow).expect("serializes"),
             serde_json::to_value(parse_document(source).expect("parses")).expect("serializes"),
         );
+    }
+
+    #[test]
+    fn load_document_from_file_returns_exactly_the_bytes_it_parsed() {
+        let source = "name: demo\ndescription: d\nsteps:\n  a: { tool: naming.v1, with: {} }\n";
+        let path = temp_file("from-file.yaml", source.as_bytes());
+        let file = std::fs::File::open(&path).expect("opens");
+        let (workflow, bytes) = load_document_from_file(file, &path).expect("parses");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(bytes, source.as_bytes());
+        assert_eq!(
+            serde_json::to_value(&workflow).expect("serializes"),
+            serde_json::to_value(parse_document(source).expect("parses")).expect("serializes"),
+        );
+    }
+
+    #[test]
+    fn load_document_from_file_refuses_a_file_over_the_cap_sized_from_the_handle() {
+        let size = MAX_DOCUMENT_BYTES + 1;
+        let path = temp_file("from-file-oversized.yaml", &vec![b'a'; size]);
+        let file = std::fs::File::open(&path).expect("opens");
+        let err = load_document_from_file(file, &path).unwrap_err();
+        std::fs::remove_file(&path).ok();
+        match err.kind {
+            DocumentErrorKind::TooLarge { bytes } => assert_eq!(bytes, size),
+            other => panic!("expected TooLarge, got {other:?}"),
+        }
     }
 
     #[test]
