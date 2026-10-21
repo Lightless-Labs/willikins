@@ -91,6 +91,13 @@ pub struct ServerConfig {
     /// `PORT`, used to build a bind address (`0.0.0.0:$PORT`) when
     /// `serve --http` is given no `--bind`. `None` when unset.
     pub port: Option<u16>,
+    /// `RAILWAY_VOLUME_MOUNT_PATH` -- Railway's own name for the volume's
+    /// mount point (milestone 2c, decision 25), read only to warn, by
+    /// name, when [`Self::workflows_dir`] is not beneath it; never
+    /// derived into a fallback trusted directory of its own. `None` when
+    /// unset, which is the normal case off Railway (a local checkout, a
+    /// test).
+    pub volume_mount_path: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -136,6 +143,7 @@ impl ServerConfig {
         let approver_token_hash = optional_token_hash(&lookup, "WILLIKINS_APPROVER_TOKEN_HASH")?;
         let allowed_hosts = optional_host_list(&lookup, "WILLIKINS_ALLOWED_HOSTS");
         let port = optional_port(&lookup, "PORT")?;
+        let volume_mount_path = non_empty(&lookup, "RAILWAY_VOLUME_MOUNT_PATH").map(PathBuf::from);
         Ok(Self {
             workflows_dir,
             journal_path,
@@ -147,6 +155,7 @@ impl ServerConfig {
             approver_token_hash,
             allowed_hosts,
             port,
+            volume_mount_path,
         })
     }
 }
@@ -309,6 +318,29 @@ mod tests {
         assert_eq!(config.approver_token_hash, None);
         assert!(config.allowed_hosts.is_empty());
         assert_eq!(config.port, None);
+        assert_eq!(config.volume_mount_path, None);
+    }
+
+    #[test]
+    fn railway_volume_mount_path_is_read_when_set() {
+        let vars = vars(&[
+            ("WILLIKINS_WORKFLOWS_DIR", "/data/workflows"),
+            ("WILLIKINS_JOURNAL_PATH", "/data/journal.jsonl"),
+            ("RAILWAY_VOLUME_MOUNT_PATH", "/data"),
+        ]);
+        let config = ServerConfig::from_vars(lookup(&vars)).unwrap();
+        assert_eq!(config.volume_mount_path, Some(PathBuf::from("/data")));
+    }
+
+    #[test]
+    fn an_empty_railway_volume_mount_path_is_treated_as_unset() {
+        let vars = vars(&[
+            ("WILLIKINS_WORKFLOWS_DIR", "/wf"),
+            ("WILLIKINS_JOURNAL_PATH", "/journal.jsonl"),
+            ("RAILWAY_VOLUME_MOUNT_PATH", ""),
+        ]);
+        let config = ServerConfig::from_vars(lookup(&vars)).unwrap();
+        assert_eq!(config.volume_mount_path, None);
     }
 
     fn hash_hex(text: &str) -> String {

@@ -110,6 +110,11 @@ argon2 = "0.6"
 # PHC string encoding, direct dependency so a later parameter increase
 # is a per-hash migration rather than a flag day. 0.6.0 is yanked.
 password-hash = "0.6"
+# The trusted-directory handle (milestone 2c, decision 25): a safe
+# `openat(O_NOFOLLOW)` the workspace's `unsafe_code = "forbid"` rules out
+# calling through `libc` directly. Already in the lock at 1.1.4 (through
+# `fd-lock` and `tempfile`), so this adds no new crate to the build.
+rustix = { version = "1", features = ["fs"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

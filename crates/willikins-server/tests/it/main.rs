@@ -33,3 +33,5 @@ mod reversal_table;
 mod rollback_r8;
 mod send_sync;
 mod serve_http_deploy_pins;
+mod trusted_directory_volume;
+mod workflows_dir_write_guard;

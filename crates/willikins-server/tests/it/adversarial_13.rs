@@ -2208,48 +2208,64 @@ fn a_rejected_input_value_is_quoted_back_bounded_and_escaped() {
     );
 }
 
-/// A `WILLIKINS_WORKFLOWS_DIR` that is *itself* a symlink is followed,
-/// and the server starts and serves the documents behind it.
+/// A `WILLIKINS_WORKFLOWS_DIR` that is *itself* a symlink now refuses to
+/// start at all -- milestone 2c, decision 25.
 ///
-/// Recorded, not changed. The refusal that exists -- `scan_directory`'s
-/// and `load_named_document`'s -- is about an *entry inside* the trusted
-/// directory, which is content a workflow document's author could
-/// introduce. The directory itself is named by an environment variable
-/// only the operator sets, on the host the operator controls, alongside
-/// the two provider credentials; refusing a symlinked path there would
-/// break the ordinary deployment shapes (a mounted volume, a
-/// `current -> release-N` layout) to defend against someone who already
-/// chooses the value. Pinned so the asymmetry is deliberate and on the
-/// record rather than discovered later.
+/// **Superseded, not merely recorded.** Until this milestone the
+/// documented position was the opposite: a symlinked *entry inside* the
+/// trusted directory was refused, but the directory itself was "named by
+/// an environment variable only the operator sets", so following it was
+/// treated as an operator-level trust decision rather than an attack
+/// surface. On a writable volume that a running server can no longer
+/// assume stays what it was at the last restart (decision 25's whole
+/// premise), that asymmetry stops being safe: `TrustedDirectory::open`
+/// now opens `WILLIKINS_WORKFLOWS_DIR` itself with `O_NOFOLLOW`, exactly
+/// as it always refused a symlinked entry. Over the real binary and a
+/// real socket (or, here, the real absence of one): the process exits
+/// with `StartupError::Symlink` and never binds a port at all, so this
+/// test drives it directly rather than through `start_server_at`, which
+/// asserts a successful bind.
 #[cfg(unix)]
 #[test]
-fn a_symlinked_workflows_directory_is_followed_and_recorded_as_operator_level() {
+fn a_symlinked_workflows_directory_refuses_to_start() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let real = dir.path().join("real-workflows");
     std::fs::create_dir_all(&real).unwrap();
     copy_fixture_as(&real, "new-rust-service.yaml", "new-rust-service.yaml");
     let link = dir.path().join("linked-workflows");
     std::os::unix::fs::symlink(&real, &link).unwrap();
+    let journal_path = dir.path().join("journal.jsonl");
 
-    let server = start_server_at(&link, &dir.path().join("journal.jsonl"));
-    let listed = call_tool(
-        &server,
-        AGENT_TOKEN,
-        "list_workflows",
-        &serde_json::json!({}),
+    let output = Command::new(env!("CARGO_BIN_EXE_willikins-server"))
+        .args(["serve", "--http", "--bind", "127.0.0.1:0"])
+        .env_clear()
+        .env("WILLIKINS_WORKFLOWS_DIR", &link)
+        .env("WILLIKINS_JOURNAL_PATH", &journal_path)
+        .env("WILLIKINS_AGENT_TOKEN_HASHES", sha256_hex(AGENT_TOKEN))
+        .env(
+            "WILLIKINS_APPROVER_TOKEN_HASH",
+            sha256_hex(APPROVER_PASSWORD),
+        )
+        .env("WILLIKINS_ALLOWED_HOSTS", "127.0.0.1,localhost")
+        .env("WILLIKINS_FAKE_CATALOG", "1")
+        .output()
+        .expect("the willikins-server binary runs");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a symlinked trusted directory must refuse to start: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    assert_ne!(
-        listed["result"]["isError"].as_bool(),
-        Some(true),
-        "a symlinked trusted directory is followed: {listed}"
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(link.to_str().unwrap()) && stderr.to_lowercase().contains("symlink"),
+        "the refusal names the symlinked directory: {stderr}"
     );
-    plan_over_mcp(
-        &server,
-        AGENT_TOKEN,
-        "new-rust-service",
-        &serde_json::json!({ "slug": "third-thoughts", "org": "lightless-labs" }),
-    )
-    .expect("and its documents plan");
+    assert!(
+        !journal_path.exists() || std::fs::read_to_string(&journal_path).unwrap().is_empty(),
+        "nothing is journaled on a refused startup"
+    );
 }
 
 /// A plan applied in one process cannot be applied again in the next.

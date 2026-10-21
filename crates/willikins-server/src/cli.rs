@@ -333,6 +333,11 @@ fn build_http_config(
 /// catalog (via each provider crate's own `credential_from_env`) unless
 /// `fake`, and [`Butler::start`] for the trusted-directory validation.
 fn build_butler(fake: bool, config: ServerConfig) -> Result<Butler, StartError> {
+    warn_if_workflows_dir_outside_volume_mount(
+        &config.workflows_dir,
+        config.volume_mount_path.as_deref(),
+    );
+
     let catalog = if fake {
         let (_state, catalog) = Butler::fake_catalog();
         catalog
@@ -361,6 +366,32 @@ fn build_butler(fake: bool, config: ServerConfig) -> Result<Butler, StartError> 
         read_rate_per_minute: config.read_rate_per_minute,
     })
     .map_err(StartError::from)
+}
+
+/// Milestone 2c, decision 25: a named warning, never a refusal, when
+/// `RAILWAY_VOLUME_MOUNT_PATH` is set but `workflows_dir` is not beneath
+/// it -- the trusted directory is never *derived* from the mount path
+/// (that would give the server a second way of choosing it), so this is
+/// only an operator-facing signal that the two disagree, most often
+/// because an operator forgot to point `WILLIKINS_WORKFLOWS_DIR` at the
+/// volume at all. A pure function (never reads the environment itself)
+/// so it can be pinned directly against a given pair of paths; the one
+/// production caller, [`build_butler`], reads both from the already-loaded
+/// [`ServerConfig`].
+fn warn_if_workflows_dir_outside_volume_mount(
+    workflows_dir: &std::path::Path,
+    mount: Option<&std::path::Path>,
+) {
+    let Some(mount) = mount else {
+        return;
+    };
+    if !workflows_dir.starts_with(mount) {
+        tracing::warn!(
+            workflows_dir = %workflows_dir.display(),
+            volume_mount_path = %mount.display(),
+            "WILLIKINS_WORKFLOWS_DIR is not beneath RAILWAY_VOLUME_MOUNT_PATH"
+        );
+    }
 }
 
 /// Why `hash-token` refused. Carries no value: the whole point of this
@@ -455,5 +486,73 @@ pub fn run_hash_token() -> ExitCode {
             eprintln!("hash-token: {error}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::warn_if_workflows_dir_outside_volume_mount;
+    use std::io::Write;
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct CapturingWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CapturingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Run `body` under a subscriber that writes every event into a
+    /// buffer this returns as a `String`, rather than `willikins-server`'s
+    /// own production writer (stderr) -- so a test can assert on exactly
+    /// what was logged without a child process.
+    fn capture_logs(body: impl FnOnce()) -> String {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let for_writer = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || CapturingWriter(for_writer.clone()))
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, body);
+        String::from_utf8(buffer.lock().unwrap().clone()).unwrap()
+    }
+
+    #[test]
+    fn no_warning_when_the_mount_path_is_unset() {
+        let log = capture_logs(|| {
+            warn_if_workflows_dir_outside_volume_mount(Path::new("/data/workflows"), None);
+        });
+        assert!(log.is_empty(), "{log}");
+    }
+
+    #[test]
+    fn no_warning_when_workflows_dir_is_beneath_the_mount_path() {
+        let log = capture_logs(|| {
+            warn_if_workflows_dir_outside_volume_mount(
+                Path::new("/data/workflows"),
+                Some(Path::new("/data")),
+            );
+        });
+        assert!(log.is_empty(), "{log}");
+    }
+
+    #[test]
+    fn warns_by_name_when_workflows_dir_is_outside_the_mount_path() {
+        let log = capture_logs(|| {
+            warn_if_workflows_dir_outside_volume_mount(
+                Path::new("/app/workflows"),
+                Some(Path::new("/data")),
+            );
+        });
+        assert!(log.contains("RAILWAY_VOLUME_MOUNT_PATH"), "{log}");
+        assert!(log.contains("/app/workflows"), "{log}");
+        assert!(log.contains("/data"), "{log}");
     }
 }

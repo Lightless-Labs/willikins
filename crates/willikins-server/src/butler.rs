@@ -183,6 +183,19 @@ impl Butler {
         let butler = Self::new(config);
         let loaded = startup::scan_directory(&butler.workflows_dir, &butler.catalog)?;
 
+        // Milestone 2c, decision 25: on a writable volume the document
+        // set can change between one deploy and the next, so every start
+        // logs exactly what it validated -- one line per file, naming it
+        // and its short sha -- and a named warning when the directory
+        // held nothing at all (more often an operator mistake on a fresh
+        // volume than an intentional empty deployment).
+        if loaded.is_empty() {
+            tracing::warn!(
+                workflows_dir = %butler.workflows_dir.display(),
+                "the trusted workflow directory holds no document"
+            );
+        }
+
         let mut workflow_hashes = std::collections::BTreeMap::new();
         for entry in &loaded {
             let filename = entry
@@ -191,7 +204,19 @@ impl Butler {
                 .and_then(|name| name.to_str())
                 .unwrap_or_default()
                 .to_string();
-            workflow_hashes.insert(filename, entry.document_sha256.to_string());
+            let sha = entry.document_sha256.to_string();
+            // The full digest is already in the journal's own
+            // `ServerStarted` line; this is a log-friendly prefix for an
+            // operator skimming startup output, not an identifier subject
+            // to milestone 2c's masking rules (a content hash is neither
+            // secret nor an identifier type).
+            let short_sha = &sha[..12.min(sha.len())];
+            tracing::info!(
+                file = %filename,
+                sha = %short_sha,
+                "validated trusted workflow document"
+            );
+            workflow_hashes.insert(filename, sha);
         }
 
         butler

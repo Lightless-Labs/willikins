@@ -8,12 +8,14 @@
 //! final path component is a symlink could point at content outside the
 //! directory the operator vetted as the trusted checkout, so
 //! [`scan_directory`] refuses the whole scan with [`StartupError::Symlink`]
-//! the moment it finds one, the same decision
-//! `crate::document::load_named_document` makes for a single named lookup
-//! (see that module's own doc). Checked with `std::fs::symlink_metadata`
-//! /`DirEntry::file_type`, neither of which follows the final component --
-//! unlike `Path::is_file`, which would happily read straight through a
-//! symlink and make this refusal a no-op.
+//! the moment it finds one -- as does the directory itself, if it is a
+//! symlink -- the same decision `crate::document::TrustedDirectory` makes
+//! for a single named lookup (see that module's own doc). Milestone 2c,
+//! decision 25: every entry is opened relative to one handle on the
+//! directory (`O_DIRECTORY | O_NOFOLLOW`, then `openat(O_NOFOLLOW)` per
+//! entry), never by re-resolving a joined path, so a directory swapped
+//! to a symlink after this scan's own handle was opened cannot change
+//! what this scan reads.
 //!
 //! **Non-recursive.** A subdirectory (`workflows/fixtures/` under the
 //! real trusted directory, say) is silently skipped rather than descended
@@ -32,7 +34,22 @@ use willikins_dsl::DocumentError;
 use willikins_journal::DocumentSha256;
 use willikins_types::{DomainType, WorkflowName};
 
-use crate::document::TrustedResolver;
+use crate::document::{DirOpenError, TrustedDirectory, TrustedResolver};
+
+/// [`DirOpenError::Symlink`] and [`DirOpenError::Io`] both name `dir`
+/// itself (the only path either one is ever about): map each to its
+/// [`StartupError`] shape.
+fn dir_open_error(dir: &Path, err: DirOpenError) -> StartupError {
+    match err {
+        DirOpenError::Symlink => StartupError::Symlink {
+            path: dir.to_path_buf(),
+        },
+        DirOpenError::Io(message) => StartupError::Directory {
+            path: dir.to_path_buf(),
+            message,
+        },
+    }
+}
 
 /// Why [`scan_directory`] (and so [`crate::Butler::start`] or
 /// [`crate::Butler::list_workflows`]) refused, naming the file.
@@ -51,9 +68,11 @@ pub enum StartupError {
         /// The underlying I/O message.
         message: String,
     },
-    /// A `.yaml`/`.yml` entry is a symlink; refused rather than followed.
+    /// A `.yaml`/`.yml` entry is a symlink, or (milestone 2c, decision
+    /// 25) the trusted directory itself is; refused rather than
+    /// followed either way.
     Symlink {
-        /// The symlinked entry.
+        /// The symlinked entry, or the trusted directory itself.
         path: PathBuf,
     },
     /// The file's name (without its extension) is not a valid
@@ -119,7 +138,7 @@ impl std::fmt::Display for StartupError {
                 write!(f, "{}: {message}", path.display())
             }
             Self::Symlink { path } => {
-                write!(f, "{}: a symlinked document is refused", path.display())
+                write!(f, "{}: a symlink is refused, not followed", path.display())
             }
             Self::InvalidName { path, message } => write!(f, "{}: {message}", path.display()),
             Self::NameMismatch {
@@ -201,40 +220,38 @@ pub struct Loaded {
 ///
 /// See [`StartupError`].
 pub fn scan_directory(dir: &Path, catalog: &Catalog) -> Result<Vec<Loaded>, StartupError> {
-    let mut candidates = Vec::new();
-    let entries = std::fs::read_dir(dir).map_err(|err| StartupError::Directory {
-        path: dir.to_path_buf(),
-        message: err.to_string(),
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|err| StartupError::Directory {
-            path: dir.to_path_buf(),
-            message: err.to_string(),
-        })?;
-        let path = entry.path();
-        let is_yaml = matches!(
-            path.extension().and_then(|ext| ext.to_str()),
-            Some("yaml" | "yml")
-        );
-        if !is_yaml {
-            continue;
-        }
-        let file_type = entry.file_type().map_err(|err| StartupError::Directory {
-            path: path.clone(),
-            message: err.to_string(),
-        })?;
-        if file_type.is_symlink() {
-            return Err(StartupError::Symlink { path });
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        candidates.push(path);
-    }
-    candidates.sort();
+    // Milestone 2c, decision 25: open the trusted directory exactly once
+    // for this whole scan, with `O_DIRECTORY | O_NOFOLLOW` -- refusing a
+    // symlinked directory outright rather than silently scanning whatever
+    // it points at. Every entry below is then opened relative to this
+    // same handle (`TrustedDirectory::open_regular`), never by rejoining
+    // and re-resolving `dir` plus a filename as a path, which is what
+    // would leave a window between deciding an entry is safe and
+    // actually reading it.
+    let handle = TrustedDirectory::open(dir).map_err(|err| dir_open_error(dir, err))?;
+    let candidates = handle
+        .yaml_entries()
+        .map_err(|err| dir_open_error(dir, err))?;
 
     let mut loaded = Vec::with_capacity(candidates.len());
-    for path in candidates {
+    for filename in candidates {
+        let path = handle.root().join(&filename);
+
+        // Opened (and `fstat`ed) before anything about its name is
+        // judged, matching the pre-2c scan's own order: a non-regular
+        // entry (a subdirectory, say) is silently skipped here exactly
+        // as it always was, never reaching the stem check below at all.
+        let file = match handle.open_regular(filename.as_os_str()) {
+            Ok(Some(file)) => file,
+            Ok(None) => continue,
+            Err(crate::document::EntryOpenError::Symlink) => {
+                return Err(StartupError::Symlink { path });
+            }
+            Err(crate::document::EntryOpenError::Io(message)) => {
+                return Err(StartupError::Directory { path, message });
+            }
+        };
+
         let stem = path
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -244,10 +261,16 @@ pub fn scan_directory(dir: &Path, catalog: &Catalog) -> Result<Vec<Loaded>, Star
             message: error.to_string(),
         })?;
 
-        let workflow =
-            willikins_dsl::load_document(&path).map_err(|error| StartupError::Document {
-                path: path.clone(),
-                error,
+        // One read: hashes exactly the bytes this parses, through the
+        // same descriptor `handle.open_regular` already opened -- no
+        // second, path-based read of what might by now be a different
+        // file under the same name.
+        let (workflow, bytes) =
+            willikins_dsl::load_document_from_file(file, &path).map_err(|error| {
+                StartupError::Document {
+                    path: path.clone(),
+                    error,
+                }
             })?;
         if workflow.name != name {
             return Err(StartupError::NameMismatch {
@@ -256,11 +279,6 @@ pub fn scan_directory(dir: &Path, catalog: &Catalog) -> Result<Vec<Loaded>, Star
                 found: workflow.name,
             });
         }
-
-        let bytes = std::fs::read(&path).map_err(|err| StartupError::Directory {
-            path: path.clone(),
-            message: err.to_string(),
-        })?;
 
         // Milestone 2b, decision (d8): link this document's own `uses:`
         // tree against the trusted directory itself (every document a

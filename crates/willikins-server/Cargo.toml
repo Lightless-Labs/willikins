@@ -43,6 +43,7 @@ webauthn-rs.workspace = true
 argon2.workspace = true
 password-hash.workspace = true
 axum-extra.workspace = true
+rustix.workspace = true
 # Not through `[workspace.dependencies]`: the `willikins-providers-github`
 # precedent (`crates/willikins-providers-github/Cargo.toml:47`), the
 # CSPRNG `p256`'s key generation needs. Not `rand` 0.8 (milestone 2c,
