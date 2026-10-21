@@ -65,7 +65,7 @@ use std::sync::Arc;
 use http::request::Parts;
 use rmcp::handler::server::wrapper::{Json, Parameters};
 use rmcp::model::{
-    CallToolResult, ErrorData, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
+    CallToolResult, ErrorData, Implementation, ProtocolVersion, ServerCapabilities, ServerConfig,
 };
 use rmcp::transport::stdio;
 use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
@@ -783,7 +783,7 @@ impl WillikinsHandler {
 
 #[tool_handler]
 impl ServerHandler for WillikinsHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let mut instructions = String::from(
             "willikins is a provisioning butler. `plan` and `apply` take a workflow \
              name resolved in this server's own trusted directory -- never inline \
@@ -802,7 +802,7 @@ impl ServerHandler for WillikinsHandler {
                  real provider.",
             );
         }
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(ProtocolVersion::V_2026_07_28)
             .with_server_info(Implementation::new(
                 "willikins-server",
